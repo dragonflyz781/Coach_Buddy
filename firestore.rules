@@ -1,0 +1,260 @@
+rules_version = '2';
+
+// ============================================================================
+// Round Tracker (multi-company) - Firestore security rules
+//
+// Data layout
+//   users/{uid}                          { companyId, role: 'admin'|'driver'|'maintenance' (v18), name, email, createdAt }
+//   companies/{companyId}                { name, ownerUid, createdAt, operator?: { name, address?, tel?, email? },
+//                                          serviceTypes?: ['schools'|'colleges'|'rail'|'other', ...] }
+//   companies/{companyId}/routes/{id}    route documents (track, stops, timetable ...)
+//   companies/{companyId}/runs/{id}      submitted driver runs (passenger counts per stop, optional incidents v16) - write-once
+//   companies/{companyId}/vehicles/{id}  the company's vehicles { reg, height?, length?, width? (m), weight? (t) } (v9)
+//   companies/{companyId}/dayPlans/{uid}_{YYYY-MM-DD}
+//                                        a driver's plan for one duty day (05:00-05:00 London): today's picks, vehicle and
+//                                        the routes already submitted (v15). Only that driver writes it; admins can read it.
+//   companies/{companyId}/defects/{id}   vehicle checks (v18): the white "1st use pre drive away check" (kind 'predrive') and
+//                                        the pink "end of duty defect report" (kind 'endofduty'). Written once by the driver;
+//                                        admins read all, maintenance reads only the ones with a defect (hasDefect == true);
+//                                        admins / maintenance can only add the "Defect rectified by / date" fields.
+//
+// Principles
+//   * Everything requires a signed-in user who has a users/{uid} profile.
+//   * A user can only ever touch data under their OWN companyId (taken from their
+//     profile document on the server - the browser cannot fake it).
+//   * Admins can write routes and manage the users of their own company.
+//   * Drivers can read routes. While a run is in progress the passenger counts are kept on the
+//     device; when the driver taps "Finish & submit run" ONE run document is created (create only,
+//     with driverUid == their own uid). Runs can never be updated; only admins can read all runs
+//     of their company (a driver can read only their own) and only admins can delete them.
+// ============================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function profilePath(uid) { return /databases/$(database)/documents/users/$(uid); }
+    function hasProfile() { return signedIn() && exists(profilePath(request.auth.uid)); }
+    function myProfile() { return get(profilePath(request.auth.uid)).data; }
+    function inCompany(cid) { return hasProfile() && myProfile().companyId == cid; }
+    function isAdmin(cid)   { return inCompany(cid) && myProfile().role == 'admin'; }
+    // v18: a maintenance login belongs to the company but is NOT a driver: it only sees vehicle defects
+    function isDriverOrAdmin(cid) { return inCompany(cid) && myProfile().role in ['admin', 'driver']; }
+    function isMaintenance(cid)   { return inCompany(cid) && myProfile().role == 'maintenance'; }
+
+    // ---------------------------------------------------------------- users
+    match /users/{uid} {
+      // You can read your own profile; admins can read the profiles of their company.
+      allow read: if signedIn() && (uid == request.auth.uid || isAdmin(resource.data.companyId));
+
+      // (a) Company registration: a brand-new user creates THEIR OWN admin profile, and only
+      //     for a company document that is created in the same batch with them as owner.
+      allow create: if signedIn() && uid == request.auth.uid
+                    && request.resource.data.keys().hasOnly(['companyId','role','name','email','createdAt'])
+                    && request.resource.data.role == 'admin'
+                    && request.resource.data.companyId is string
+                    && !exists(/databases/$(database)/documents/companies/$(request.resource.data.companyId))
+                    && getAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.ownerUid == uid;
+
+      // (b) An admin adds a DRIVER or (v18) a MAINTENANCE login to their own company (never an admin, never another company).
+      allow create: if signedIn() && uid != request.auth.uid
+                    && request.resource.data.keys().hasOnly(['companyId','role','name','email','createdAt'])
+                    && request.resource.data.role in ['driver', 'maintenance']
+                    && request.resource.data.companyId is string
+                    && isAdmin(request.resource.data.companyId);
+
+      // Admins may rename a user of their company; company and role can never change.
+      allow update: if isAdmin(resource.data.companyId)
+                    && request.resource.data.companyId == resource.data.companyId
+                    && request.resource.data.role == resource.data.role;
+
+      // Admins can remove other users (not themselves) of their own company.
+      allow delete: if isAdmin(resource.data.companyId) && uid != request.auth.uid;
+    }
+
+    // ------------------------------------------------------------ companies
+    match /companies/{companyId} {
+      allow read: if inCompany(companyId);
+
+      // What the company operates (v8): a non-empty list of up to 4 known values, no duplicates.
+      // Missing = all four (older companies).
+      function validServiceTypes(t) {
+        return t is list && t.size() > 0 && t.size() <= 4
+            && t.hasOnly(['schools','colleges','rail','other'])
+            && t.toSet().size() == t.size();
+      }
+
+      // Creating a company: you become its owner, and you must not already belong to one.
+      allow create: if signedIn()
+                    && request.resource.data.keys().hasOnly(['name','ownerUid','createdAt','serviceTypes'])
+                    && (!('serviceTypes' in request.resource.data) || validServiceTypes(request.resource.data.serviceTypes))
+                    && request.resource.data.ownerUid == request.auth.uid
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120
+                    && !exists(profilePath(request.auth.uid));
+
+      // Operator details shown on every route's Schedule: { name (required), address?, tel?, email? }.
+      // Size limits + shape are checked here; email must look like x@y.z (or be empty); tel is free text.
+      function validOperator(o) {
+        return o is map
+            && o.keys().hasOnly(['name','address','tel','email'])
+            && o.keys().hasAll(['name'])
+            && o.name is string && o.name.trim().size() > 0 && o.name.size() <= 120
+            && (!('address' in o) || (o.address is string && o.address.size() <= 250))
+            && (!('tel' in o)     || (o.tel is string && o.tel.size() <= 40))
+            && (!('email' in o)   || (o.email is string && o.email.size() <= 120
+                                      && (o.email.size() == 0 || o.email.matches('^[^@ \\t\\r\\n]+@[^@ \\t\\r\\n]+\\.[^@ \\t\\r\\n]+$'))));
+      }
+
+      // Admins may rename the company, set its operator details and what it operates (serviceTypes);
+      // nothing else can change (owner can't be changed, no extra fields can be added). Drivers cannot update at all.
+      allow update: if isAdmin(companyId)
+                    && request.resource.data.ownerUid == resource.data.ownerUid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','operator','serviceTypes'])
+                    && (!('serviceTypes' in request.resource.data) || validServiceTypes(request.resource.data.serviceTypes))
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120
+                    && (!('operator' in request.resource.data) || validOperator(request.resource.data.operator));
+      allow delete: if false;
+
+      // --------------------------------------------------------------- routes
+      match /routes/{routeId} {
+        allow read:  if isDriverOrAdmin(companyId);          // admins and drivers (not maintenance, v18)
+        allow write: if isAdmin(companyId);                  // create / update / delete: admins only
+      }
+
+      // ------------------------------------------------------------- vehicles (v9)
+      // { reg (required, 1-20 chars), height / length / width in metres, weight in tonnes (optional numbers),
+      //   createdAt?, updatedAt?, updatedBy? }. Admins create / edit / delete; drivers of the company read.
+      match /vehicles/{vehicleId} {
+        function dim(d, k, max) { return !(k in d) || d[k] == null || (d[k] is number && d[k] > 0 && d[k] <= max); }
+        function validVehicle(d) {
+          return d.keys().hasOnly(['reg','height','length','width','weight','createdAt','updatedAt','updatedBy'])
+              && d.reg is string && d.reg.trim().size() > 0 && d.reg.size() <= 20
+              && dim(d, 'height', 10) && dim(d, 'length', 30) && dim(d, 'width', 5) && dim(d, 'weight', 100)
+              && (!('updatedBy' in d) || d.updatedBy == request.auth.uid);
+        }
+        allow read:   if inCompany(companyId);
+        allow create, update: if isAdmin(companyId) && validVehicle(request.resource.data);
+        allow delete: if isAdmin(companyId);
+      }
+
+      // ------------------------------------------------------------- dayPlans (v15)
+      // One document per driver per duty day, id "<uid>_<YYYY-MM-DD>":
+      //   { uid (== the signed-in user), day (YYYY-MM-DD, must match the id), sel (the picks, string <= 4000),
+      //     vehicleId? (string <= 128), vehicleReg? (string <= 20), done (list of route ids, <= 200), updatedAt (server time) }
+      // The driver (or an admin driving) reads / writes / deletes only their OWN plans in their own company;
+      // the company's admins can read every plan (read only).
+      match /dayPlans/{planId} {
+        function ownPlanId() { return planId.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$'); }
+        function validPlan(d) {
+          return d.keys().hasOnly(['uid','day','sel','vehicleId','vehicleReg','done','updatedAt'])
+              && d.keys().hasAll(['uid','day','sel','done','updatedAt'])
+              && d.uid == request.auth.uid
+              && d.day is string && planId == request.auth.uid + '_' + d.day
+              && d.sel is string && d.sel.size() <= 4000
+              && (!('vehicleId' in d)  || (d.vehicleId is string && d.vehicleId.size() <= 128))
+              && (!('vehicleReg' in d) || (d.vehicleReg is string && d.vehicleReg.size() <= 20))
+              && d.done is list && d.done.size() <= 200
+              && d.updatedAt == request.time;
+        }
+        allow read:           if (isDriverOrAdmin(companyId) && ownPlanId()) || isAdmin(companyId);
+        allow create, update: if isDriverOrAdmin(companyId) && ownPlanId() && validPlan(request.resource.data);
+        allow delete:         if isDriverOrAdmin(companyId) && ownPlanId();
+      }
+
+      // ----------------------------------------------------------------- runs
+      // A run is a finished trip with passenger counts, written once by the driver (or an admin
+      // driving). Rules cannot loop over the `stops` array, so its elements are not validated
+      // one by one - the array length is capped and Firestore's own 1 MiB document limit applies.
+      match /runs/{runId} {
+        function isCount(v) { return v is int && v >= 0 && v <= 100000; }
+        function validRun(d) {
+          return d.keys().hasOnly(['routeId','routeName','session','driverUid','driverName','startedAt','submittedAt',
+                                   'totalBoarded','totalAlighted','unscheduledBoarded','unscheduledAlighted','stops','vehicleReg',
+                                   'incidents'])
+              && (!('vehicleReg' in d) || (d.vehicleReg is string && d.vehicleReg.size() <= 20))   // v9, optional
+              // v16, optional: incidents flagged by the driver [{ at, lat?, lng?, stopIndex?, stopName?, type, note, cctv }].
+              // Like stops, rules can't loop over the list, so only its type and length (<= 20) are checked.
+              && (!('incidents' in d) || (d.incidents is list && d.incidents.size() <= 20))
+              && d.keys().hasAll(['routeId','routeName','session','driverUid','driverName','startedAt','submittedAt',
+                                  'totalBoarded','totalAlighted','unscheduledBoarded','unscheduledAlighted','stops'])
+              && d.routeId is string && d.routeId.size() > 0 && d.routeId.size() <= 128
+              && d.routeName is string && d.routeName.size() <= 200
+              && d.session is string && d.session.size() <= 10
+              && d.driverUid == request.auth.uid
+              && d.driverName is string && d.driverName.size() <= 120
+              && d.startedAt is timestamp
+              && d.submittedAt == request.time
+              && isCount(d.totalBoarded) && isCount(d.totalAlighted)
+              && isCount(d.unscheduledBoarded) && isCount(d.unscheduledAlighted)
+              && d.stops is list && d.stops.size() <= 500;
+        }
+        // drivers and admins of THIS company, only for themselves
+        allow create: if isDriverOrAdmin(companyId) && validRun(request.resource.data);
+        // admins read every run of their company; a driver only their own (queries must filter on driverUid)
+        allow read:   if isAdmin(companyId) || (isDriverOrAdmin(companyId) && resource.data.driverUid == request.auth.uid);
+        allow update: if false;                              // runs are write-once
+        allow delete: if isAdmin(companyId);
+      }
+
+      // -------------------------------------------------------------- defects (v18)
+      // One document per paper sheet:
+      //   { kind: 'predrive' | 'endofduty', vehicleId?, vehicleReg, driverUid (== the signed-in user), driverName,
+      //     dutyDay ('YYYY-MM-DD', 05:00-05:00 London), dutyNo?, mileage? (start, white sheet), startMileage?, endMileage? (pink),
+      //     items? { itemKey: 'ok'|'x'|'na' }, notes? { itemKey: 'what is wrong' }   (white sheet checklist, <= 30 items)
+      //     defects? ['...', <= 3 lines]  (pink sheet), nil (bool), hasDefect (bool, == !nil),
+      //     signature? (PNG data URL, <= 70000 chars), signedName?, createdAt (server time),
+      //     status: 'nil' (no defect) | 'open' (defect) -> 'rectified',
+      //     rectifiedBy?, rectifiedOn? ('YYYY-MM-DD'), rectifiedNote?, rectifiedAt? (server time), rectifiedUid? }
+      // Rules can't loop over the items map / defects list, so their sizes are capped (plus Firestore's 1 MiB limit).
+      match /defects/{defectId} {
+        function optStr(d, k, max) { return !(k in d) || (d[k] is string && d[k].size() <= max); }
+        function optMiles(d, k)    { return !(k in d) || (d[k] is number && d[k] >= 0 && d[k] <= 10000000); }
+        function validSheet(d) {
+          return d.keys().hasOnly(['kind','vehicleId','vehicleReg','driverUid','driverName','dutyDay','dutyNo','mileage','startMileage',
+                                   'endMileage','items','notes','defects','nil','hasDefect','signature','signedName','createdAt','status'])
+              && d.keys().hasAll(['kind','vehicleReg','driverUid','driverName','dutyDay','nil','hasDefect','createdAt','status'])
+              && d.kind in ['predrive', 'endofduty']
+              && d.driverUid == request.auth.uid
+              && d.driverName is string && d.driverName.size() <= 120
+              && d.vehicleReg is string && d.vehicleReg.size() <= 20
+              && optStr(d, 'vehicleId', 128) && optStr(d, 'dutyNo', 40) && optStr(d, 'signedName', 120)
+              && d.dutyDay is string && d.dutyDay.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+              && optMiles(d, 'mileage') && optMiles(d, 'startMileage') && optMiles(d, 'endMileage')
+              && (!('items' in d) || (d.items is map && d.items.size() <= 30))
+              && (!('notes' in d) || (d.notes is map && d.notes.size() <= 30))
+              && (!('defects' in d) || (d.defects is list && d.defects.size() <= 3))
+              && (!('signature' in d) || (d.signature is string && d.signature.size() <= 70000
+                                          && d.signature.matches('^data:image/(png|jpeg);base64,.*')))
+              && d.nil is bool && d.hasDefect is bool && d.nil == !d.hasDefect
+              && d.status == (d.hasDefect ? 'open' : 'nil')
+              && d.createdAt == request.time;
+        }
+        // drivers and admins of THIS company, only for themselves
+        allow create: if isDriverOrAdmin(companyId) && validSheet(request.resource.data);
+        // admins: every sheet; a driver: their own (queries filter on driverUid); maintenance: only sheets WITH a defect
+        // (queries must filter on hasDefect == true) - nil reports are for admins only
+        allow read:   if isAdmin(companyId)
+                      || (isDriverOrAdmin(companyId) && resource.data.driverUid == request.auth.uid)
+                      || (isMaintenance(companyId) && resource.data.hasDefect == true);
+        // "Defect rectified by / date": admins or maintenance mark an OPEN defect rectified - nothing else can change
+        allow update: if (isAdmin(companyId) || (isMaintenance(companyId) && resource.data.hasDefect == true))
+                      && resource.data.status == 'open'
+                      && request.resource.data.diff(resource.data).affectedKeys()
+                           .hasOnly(['status','rectifiedBy','rectifiedOn','rectifiedNote','rectifiedAt','rectifiedUid'])
+                      && request.resource.data.status == 'rectified'
+                      && request.resource.data.rectifiedBy is string
+                      && request.resource.data.rectifiedBy.size() > 0 && request.resource.data.rectifiedBy.size() <= 120
+                      && request.resource.data.rectifiedOn is string && request.resource.data.rectifiedOn.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+                      && (!('rectifiedNote' in request.resource.data) || (request.resource.data.rectifiedNote is string
+                                                                         && request.resource.data.rectifiedNote.size() <= 500))
+                      && request.resource.data.rectifiedAt == request.time
+                      && request.resource.data.rectifiedUid == request.auth.uid;
+        allow delete: if isAdmin(companyId);
+      }
+    }
+
+    // Everything else is closed.
+    match /{document=**} { allow read, write: if false; }
+  }
+}
