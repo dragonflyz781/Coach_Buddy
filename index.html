@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">   <!-- v17: the app has its own dark theme - stops Chrome auto-darkening it (black buttons) -->
+<title>Round Tracker</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E🚌%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/leaflet.css">
+<link rel="stylesheet" href="css/app.css?v=17">      <!-- the original driver app styles, unchanged -->
+<link rel="stylesheet" href="css/admin.css?v=19">    <!-- sign-in, admin and layout additions -->
+</head>
+<body class="view-boot">
+
+<!-- ============ Loading ============ -->
+<div id="bootScreen" class="screen"><div class="boot-msg">Loading…</div></div>
+
+<!-- ============ Welcome (drivers + admins opening the driver view), v8 ============ -->
+<div id="welcomeScreen" class="screen" aria-live="polite">
+  <div class="welcome">
+    <div class="wl-road" aria-hidden="true">
+      <svg class="wl-bus" viewBox="0 0 48 26" width="92" height="50">
+        <rect x="1" y="2" width="44" height="17" rx="5" fill="#e0631a"/>
+        <rect x="5" y="5" width="8" height="6" rx="1.5" fill="#cfeaf5"/><rect x="15" y="5" width="8" height="6" rx="1.5" fill="#cfeaf5"/>
+        <rect x="25" y="5" width="8" height="6" rx="1.5" fill="#cfeaf5"/><rect x="35" y="5" width="8" height="9" rx="1.5" fill="#cfeaf5"/>
+        <rect x="1" y="14" width="44" height="2.5" fill="#b34a10"/><rect x="43" y="15" width="3" height="2.5" rx="1" fill="#ffe08a"/>
+        <circle cx="11" cy="20" r="4.2" fill="#1b2326"/><circle cx="11" cy="20" r="1.6" fill="#9fb0ad"/>
+        <circle cx="35" cy="20" r="4.2" fill="#1b2326"/><circle cx="35" cy="20" r="1.6" fill="#9fb0ad"/>
+      </svg>
+      <div class="wl-line"></div>
+    </div>
+    <h1 class="wl-hello" id="wlHello">Welcome</h1>
+    <div class="wl-company" id="wlCompany"></div>
+    <div class="wl-pick" id="wlPick" style="display:none">
+      <div class="wl-pick-head"><button class="wl-back" id="wlBack" type="button" style="display:none" aria-label="Back to the service types">← Back</button>
+        <div class="wl-pick-q" id="wlPickQ">What are you doing today?</div></div>
+      <div class="wl-chips" id="wlChips" role="group" aria-labelledby="wlPickQ"></div>
+      <button class="link-btn wl-last" id="wlLast" type="button" style="display:none"></button>
+    </div>
+    <div class="wl-status" id="wlStatus"><span class="wl-dots" aria-hidden="true"><i></i><i></i><i></i></span> <span id="wlStatusTxt">Loading your routes…</span></div>
+    <button class="btn primary wl-go" id="wlGo" type="button" style="display:none">Continue</button>
+  </div>
+</div>
+
+<!-- ============ Firebase not configured yet ============ -->
+<div id="setupScreen" class="screen">
+  <div class="card wide">
+    <h1>Almost there – connect Firebase</h1>
+    <p>This app needs a free Firebase project to store companies, drivers and routes.</p>
+    <ol>
+      <li>Create the project (see <b>README.md</b>, section 1).</li>
+      <li>Open <code>js/firebase-config.js</code> and paste in your project's values.</li>
+      <li>Reload this page.</li>
+    </ol>
+    <p class="muted">Just want to look around first? If you are running this on your own computer, open
+      <code>http://localhost:5000/?emulator=1</code> after running <code>npm run demo</code> (see README, section 3).</p>
+  </div>
+</div>
+
+<!-- ============ Sign in / register ============ -->
+<div id="authScreen" class="screen">
+  <div class="card">
+    <div class="brand"><span class="brand-glyph">🚌</span><h1>Round Tracker</h1></div>
+    <div class="seg" role="tablist">
+      <button class="seg-btn active" id="segSignIn" type="button">Sign in</button>
+      <button class="seg-btn" id="segRegister" type="button">Register your company</button>
+    </div>
+
+    <form id="signInForm" autocomplete="on">
+      <label>Email<input type="email" id="siEmail" autocomplete="username" required></label>
+      <label>Password<input type="password" id="siPass" autocomplete="current-password" required></label>
+      <button class="btn primary" type="submit" id="siBtn">Sign in</button>
+      <button class="link-btn" type="button" id="forgotBtn">Forgot password?</button>
+    </form>
+
+    <form id="registerForm" style="display:none" autocomplete="off">
+      <p class="muted">Create a new company account. You become its administrator and can then add routes and invite your drivers.</p>
+      <label>Company name<input type="text" id="rgCompany" required maxlength="120"></label>
+      <label>Your name <span class="muted">(optional)</span><input type="text" id="rgName" maxlength="80"></label>
+      <label>Admin email<input type="email" id="rgEmail" autocomplete="email" required></label>
+      <label>Password <span class="muted">(at least 6 characters)</span><input type="password" id="rgPass" autocomplete="new-password" minlength="6" required></label>
+      <div class="svc-q"><div class="svc-lbl" id="rgSvcLbl">What do you operate? <span class="muted">(pick one or more – you can change this later)</span></div>
+        <div class="svc-pick" id="rgSvc" role="group" aria-labelledby="rgSvcLbl"><label class="svc-chip svc-all"><input type="checkbox" name="rgSvc" value="all" data-all="1"><span>All</span></label><label class="svc-chip"><input type="checkbox" name="rgSvc" value="schools"><span><span aria-hidden="true">🏫</span> Schools</span></label><label class="svc-chip"><input type="checkbox" name="rgSvc" value="colleges"><span><span aria-hidden="true">🎓</span> Colleges</span></label><label class="svc-chip"><input type="checkbox" name="rgSvc" value="rail"><span><span aria-hidden="true">🚆</span> Rail</span></label><label class="svc-chip"><input type="checkbox" name="rgSvc" value="other"><span><span aria-hidden="true">🚌</span> Other</span></label></div></div>
+      <button class="btn primary" type="submit" id="rgBtn">Create company</button>
+    </form>
+    <div class="form-msg" id="authMsg" role="alert"></div>
+  </div>
+</div>
+
+<!-- Signed in but no company profile -->
+<div id="orphanScreen" class="screen">
+  <div class="card">
+    <h1>No company linked</h1>
+    <p>You are signed in as <b id="orphanEmail"></b>, but this account isn't linked to a company (it may have been removed by your administrator).</p>
+    <div class="row"><button class="btn" id="orphanRetry">Try again</button><button class="btn primary" id="orphanOut">Sign out</button></div>
+  </div>
+</div>
+
+<!-- ============ Admin ============ -->
+<div id="adminScreen" class="screen admin">
+  <header class="admin-top">
+    <div class="admin-title"><h1 id="adminCompany">Company</h1><div class="sub" id="adminWho"></div></div>
+    <button class="btn" id="adminToDriver">🧭 Driver view</button>
+    <button class="icon-btn" id="adminTheme" aria-label="Toggle theme">◐</button>
+    <button class="btn" id="adminSignOut">Sign out</button>
+  </header>
+  <nav class="admin-tabs" role="tablist" aria-label="Admin sections">
+    <button class="tab-btn active" id="admTabRoutes" role="tab" aria-selected="true" aria-controls="admRoutes"><span class="tab-ico" aria-hidden="true">🗺️</span><span class="tab-txt">Routes</span></button>
+    <button class="tab-btn" id="admTabOperator" role="tab" aria-selected="false" aria-controls="admOperator" tabindex="-1"><span class="tab-ico" aria-hidden="true">🏢</span><span class="tab-txt">Operator details</span></button>
+    <button class="tab-btn" id="admTabDrivers" role="tab" aria-selected="false" aria-controls="admDrivers" tabindex="-1"><span class="tab-ico" aria-hidden="true">👥</span><span class="tab-txt">Drivers</span></button>
+    <button class="tab-btn" id="admTabVehicles" role="tab" aria-selected="false" aria-controls="admVehicles" tabindex="-1"><span class="tab-ico" aria-hidden="true">🚌</span><span class="tab-txt">Vehicles</span></button>
+    <button class="tab-btn" id="admTabRuns" role="tab" aria-selected="false" aria-controls="admRuns" tabindex="-1"><span class="tab-ico" aria-hidden="true">📊</span><span class="tab-txt">Runs</span></button>
+    <button class="tab-btn" id="admTabDefects" role="tab" aria-selected="false" aria-controls="admDefects" tabindex="-1"><span class="tab-ico" aria-hidden="true">🔧</span><span class="tab-txt">Vehicle defects</span><span class="tab-count" id="admDefectsCount" style="display:none" aria-label="open defects"></span></button>
+    <div class="tab-road" id="tabRoad" aria-hidden="true">
+      <svg class="tab-bus" id="tabBus" viewBox="0 0 48 26" width="44" height="24">
+        <g class="bus-flip">
+        <g class="bus-body">
+          <rect x="1" y="2" width="44" height="17" rx="5" fill="#e0631a"/>
+          <rect x="5" y="5" width="8" height="6" rx="1.5" fill="#cfeaf5"/>
+          <rect x="15" y="5" width="8" height="6" rx="1.5" fill="#cfeaf5"/>
+          <rect x="25" y="5" width="8" height="6" rx="1.5" fill="#cfeaf5"/>
+          <rect x="35" y="5" width="8" height="9" rx="1.5" fill="#cfeaf5"/>
+          <rect x="1" y="14" width="44" height="2.5" fill="#b34a10"/>
+          <rect x="43" y="15" width="3" height="2.5" rx="1" fill="#ffe08a"/>
+        </g>
+        <g class="wheel" style="transform-origin:11px 20px"><circle cx="11" cy="20" r="4.2" fill="#1b2326"/><circle cx="11" cy="20" r="1.6" fill="#9fb0ad"/><rect x="10.5" y="16.2" width="1" height="2.4" fill="#9fb0ad"/></g>
+        <g class="wheel" style="transform-origin:35px 20px"><circle cx="35" cy="20" r="4.2" fill="#1b2326"/><circle cx="35" cy="20" r="1.6" fill="#9fb0ad"/><rect x="34.5" y="16.2" width="1" height="2.4" fill="#9fb0ad"/></g>
+        </g>
+      </svg>
+    </div>
+  </nav>
+  <main class="admin-main">
+    <section id="admRoutes" role="tabpanel" aria-labelledby="admTabRoutes">
+      <div class="toolbar">
+        <button class="btn primary" id="newRouteBtn">＋ New route</button>
+        <button class="btn" id="backupBtn" title="Download all of your company's routes as one JSON file">⬇ Backup routes</button>
+        <button class="btn" id="restoreBtn" title="Load routes from a backup file made with “Backup routes”">⬆ Restore from backup</button>
+        <input type="file" id="restoreFile" accept=".json,application/json" hidden>
+      </div>
+      <div class="card wide restore-panel" id="restorePanel" style="display:none" role="region" aria-label="Restore from backup"></div>
+      <div class="muted" id="routesStatus"></div>
+      <div id="adminRouteList"></div>
+    </section>
+    <section id="admOperator" role="tabpanel" aria-labelledby="admTabOperator" style="display:none">
+      <div class="card wide">
+        <h2>Operator details</h2>
+        <p class="muted">Your company's operator (shown to drivers in each route's Schedule, under “Operator”). New routes get these details automatically (and you can apply them to the routes you already have); each route can still have its own.</p>
+        <form id="opForm" autocomplete="off" novalidate>
+          <div class="grid2">
+            <label>Operator name <span class="muted">(required)</span><input type="text" id="opName" maxlength="120" placeholder="e.g. Alpha Coaches Ltd"></label>
+            <label>Telephone <span class="muted">(any format)</span><input type="tel" id="opTel" maxlength="40" placeholder="e.g. 01792 123456"></label>
+          </div>
+          <label>Address<input type="text" id="opAddress" maxlength="250" placeholder="Street, town, postcode"></label>
+          <label>Email<input type="email" id="opEmail" maxlength="120" placeholder="office@example.com"></label>
+          <button class="btn primary" type="submit" id="opSave">Save operator details</button>
+        </form>
+        <div class="form-msg" id="opMsg" role="status"></div>
+      </div>
+      <div class="card wide" id="svcCard">
+        <h2 id="opSvcLbl">What do you operate?</h2>
+        <p class="muted">Drivers pick which of these they are doing today when they sign in (only when you run two or three kinds), and see the routes of that service plus any route without a service type.</p>
+        <div class="svc-pick" id="opSvc" role="group" aria-labelledby="opSvcLbl"><label class="svc-chip svc-all"><input type="checkbox" name="opSvc" value="all" data-all="1"><span>All</span></label><label class="svc-chip"><input type="checkbox" name="opSvc" value="schools"><span><span aria-hidden="true">🏫</span> Schools</span></label><label class="svc-chip"><input type="checkbox" name="opSvc" value="colleges"><span><span aria-hidden="true">🎓</span> Colleges</span></label><label class="svc-chip"><input type="checkbox" name="opSvc" value="rail"><span><span aria-hidden="true">🚆</span> Rail</span></label><label class="svc-chip"><input type="checkbox" name="opSvc" value="other"><span><span aria-hidden="true">🚌</span> Other</span></label></div>
+        <button class="btn primary" type="button" id="opSvcSave" style="margin-top:10px">Save</button>
+        <div class="form-msg" id="opSvcMsg" role="status"></div>
+      </div>
+      <div class="card wide" id="opApplyCard">
+        <h2>Apply to existing routes</h2>
+        <p class="muted">Saving only changes the company default and routes you create or import afterwards. To put the saved details on routes you already have, choose how and press the button.</p>
+        <div class="op-modes">
+          <label class="op-mode"><input type="radio" name="opApplyMode" id="opModeFill" value="fill" checked>
+            <span><b>Only fill routes that have no operator details</b> (also refreshes routes that already use the company details; routes marked “Custom” are kept)</span></label>
+          <label class="op-mode"><input type="radio" name="opApplyMode" id="opModeAll" value="all">
+            <span><b>Overwrite all routes</b> (replaces every route's operator – including custom ones)</span></label>
+        </div>
+        <div class="muted" id="opApplyInfo" role="status"></div>
+        <div class="toolbar" style="margin-top:10px"><button class="btn primary" type="button" id="opApplyBtn" disabled>Apply to all routes</button></div>
+        <div class="form-msg" id="opApplyMsg" role="status"></div>
+      </div>
+    </section>
+    <section id="admDrivers" role="tabpanel" aria-labelledby="admTabDrivers" style="display:none">
+      <div class="card wide">
+        <h2>Add a driver or maintenance login</h2>
+        <p class="muted">This creates a login. Give them the email and temporary password; they can change it with “Forgot password?” on the sign-in screen. A <b>maintenance</b> login only sees vehicle defects reported by drivers (no routes, runs or settings).</p>
+        <form id="driverForm" autocomplete="off">
+          <div class="grid3">
+            <label>Name<input type="text" id="dvName" required maxlength="80"></label>
+            <label>Email<input type="email" id="dvEmail" required></label>
+            <label>Temporary password
+              <span class="input-row"><input type="text" id="dvPass" minlength="6" required autocomplete="off"><button type="button" class="btn small" id="dvGen">Generate</button></span>
+            </label>
+          </div>
+          <label class="dv-role">Role<select id="dvRole"><option value="driver">Driver</option><option value="maintenance">Maintenance – vehicle defects only</option></select></label>
+          <button class="btn primary" type="submit" id="dvBtn">Create login</button>
+        </form>
+        <div class="form-msg" id="driverMsg" role="status"></div>
+      </div>
+      <h2 class="sect">Your team</h2>
+      <div id="driverList"></div>
+    </section>
+        <section id="admVehicles" role="tabpanel" aria-labelledby="admTabVehicles" style="display:none">
+      <div class="card wide">
+        <h2 id="vehFormTitle">Add a vehicle</h2>
+        <p class="muted">Registration (number plate) is required. Height, length and width are in <b>metres</b>; weight is in <b>tonnes</b>. Drivers pick one of these on the welcome screen before they start.</p>
+        <form id="vehForm" autocomplete="off" novalidate>
+          <input type="hidden" id="vehEditId" value="">
+          <label>Registration <span class="muted">(number plate – required)</span><input type="text" id="vehReg" maxlength="20" required placeholder="e.g. CY12 ABC" inputmode="text"></label>
+          <div class="grid2">
+            <label>Height <span class="muted">(metres)</span><input type="number" id="vehHeight" min="0.1" max="10" step="0.01" placeholder="e.g. 3.2"></label>
+            <label>Length <span class="muted">(metres)</span><input type="number" id="vehLength" min="0.1" max="30" step="0.01" placeholder="e.g. 12.1"></label>
+          </div>
+          <div class="grid2">
+            <label>Width <span class="muted">(metres)</span><input type="number" id="vehWidth" min="0.1" max="5" step="0.01" placeholder="e.g. 2.55"></label>
+            <label>Weight <span class="muted">(tonnes)</span><input type="number" id="vehWeight" min="0.1" max="100" step="0.1" placeholder="e.g. 18"></label>
+          </div>
+          <div class="toolbar" style="margin-top:4px">
+            <button class="btn primary" type="submit" id="vehSave">Save vehicle</button>
+            <button class="btn" type="button" id="vehCancel" style="display:none">Cancel edit</button>
+          </div>
+        </form>
+        <div class="form-msg" id="vehMsg" role="status"></div>
+      </div>
+      <h2 class="sect">Your vehicles</h2>
+      <div id="vehicleList"></div>
+    </section>
+
+<section id="admRuns" role="tabpanel" aria-labelledby="admTabRuns" style="display:none">
+      <div class="card wide runs-card">
+        <h2>Submitted runs</h2>
+        <p class="muted">Every time a driver taps “Finish &amp; submit run”, the passenger counts per stop arrive here (newest first).</p>
+        <div class="run-filters">
+          <label>Route<select id="runFltRoute"><option value="">All routes</option></select></label>
+          <label>Driver<select id="runFltDriver"><option value="">All drivers</option></select></label>
+          <label>From<input type="date" id="runFltFrom"></label>
+          <label>To<input type="date" id="runFltTo"></label>
+          <label>Incidents<select id="runFltInc"><option value="">All runs</option><option value="inc">Only runs with incidents</option><option value="cctv">CCTV check requested</option></select></label>
+        </div>
+        <div class="run-actions">
+          <div class="run-summary" id="runSummary" role="status">No runs yet.</div>
+          <button class="btn small" id="runFltClear" type="button">Clear filters</button>
+          <button class="btn small primary" id="runCsvBtn" type="button">⬇ Download CSV</button>
+        </div>
+      </div>
+      <div id="runList"></div>
+    </section>
+    <section id="admDefects" role="tabpanel" aria-labelledby="admTabDefects" style="display:none">
+      <div id="admDefectsBody"></div>
+    </section>
+  </main>
+</div>
+
+<!-- ============ Route editor ============ -->
+<div id="editorScreen" class="screen admin">
+  <header class="admin-top">
+    <button class="btn" id="edBack">← Back</button>
+    <div class="admin-title"><h1 id="edTitle">New route</h1></div>
+    <button class="btn primary" id="edSave">Save route</button>
+  </header>
+  <main class="admin-main editor" id="edBody"></main>
+</div>
+
+<!-- ============ v18: maintenance login (vehicle defects only) ============ -->
+<div id="maintScreen" class="screen admin">
+  <header class="admin-top">
+    <div class="admin-title"><h1 id="maintCompany">Vehicle defects</h1><div class="sub" id="maintWho"></div></div>
+    <button class="icon-btn" id="maintTheme" aria-label="Toggle theme">◐</button>
+    <button class="btn" id="maintSignOut">Sign out</button>
+  </header>
+  <main class="admin-main"><div id="maintBody"></div></main>
+</div>
+
+<!-- v18: white pre-drive check / pink end-of-duty defect report -->
+<div class="vc-overlay" id="vcOverlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="vcTitle"><div class="vc-sheet" id="vcSheet"></div></div>
+
+<div id="toast" class="toast" role="status"></div>
+
+<!-- ============ Driver view (the original app) ============ -->
+<div id="driverApp">
+<div class="topbar">
+  <button class="icon-btn" id="menuBtn" aria-label="Routes">☰</button>
+  <div class="topbar-title">
+    <h1 id="routeName">Round Tracker</h1>
+    <div class="sub" id="routeSub">No route loaded</div>
+  </div>
+  <button class="icon-btn theme-toggle" id="themeBtn" aria-label="Toggle theme">◐</button>
+</div>
+
+<div class="tabs">
+  <button class="tab-btn active" id="tabMapBtn">Map</button>
+  <button class="tab-btn" id="tabSchedBtn">Schedule</button>
+</div>
+
+<div id="views">
+<div id="mapView" class="view">
+<div class="map-wrap">
+  <div id="map"></div>
+  <div class="nav-banner" id="navBanner" style="display:none;">
+    <div class="nav-card">
+      <div class="arrow" id="navTurnArrow">→</div>
+      <div class="txt"><div class="lbl">NEXT TURN</div><div class="val" id="navTurnDist">–</div></div>
+    </div>
+    <div class="nav-card">
+      <div class="arrow">📍</div>
+      <div class="txt"><div class="lbl">NEXT STOP</div><div class="val" id="navStopDist">–</div></div>
+    </div>
+  </div>
+
+  <div class="satnav-top" id="satnavTop" style="display:none;">
+    <div class="satnav-arrow" id="satnavArrow">↑</div>
+    <div class="satnav-info">
+      <div class="satnav-dist" id="satnavDist">–</div>
+      <div class="satnav-instr" id="satnavInstr">–</div>
+    </div>
+    <div class="satnav-right">
+      <div class="sn-clock" id="snClock">--:--</div>
+      <div class="sn-row">
+        <div class="sn-limit unknown" id="snLimit" title="Speed limit">–</div>
+        <div class="sn-speed" id="snSpeedBox"><b id="snSpeed">0</b><small>MPH</small></div>
+      </div>
+    </div>
+  </div>
+  <div class="satnav-then" id="satnavThen" style="display:none;"></div>
+
+  <div class="satnav-bottom" id="satnavBottom" style="display:none;">
+    <div class="sb-stat"><div class="sb-val" id="sbEta">–</div><div class="sb-lbl">ETA</div></div>
+    <div class="sb-stat"><div class="sb-val" id="sbRemaining">–</div><div class="sb-lbl">REMAINING</div></div>
+    <div class="sb-stat"><div class="sb-val" id="sbSpeed">–</div><div class="sb-lbl">MPH</div></div>
+    <div class="sb-stat"><div class="sb-val" id="sbStop">–</div><div class="sb-lbl">NEXT STOP</div></div>
+  </div>
+  <div class="next-stop" id="nextStop" style="display:none;" aria-live="polite">
+    <div class="ns-num" id="nsNum">–</div>
+    <div class="ns-main"><div class="ns-lbl" id="nsLbl">NEXT STOP</div><div class="ns-name" id="nsName">–</div></div>
+    <div class="ns-right"><div class="ns-dist" id="nsDist">–</div><div class="ns-time" id="nsTime"></div><div class="ns-wait" id="nsWait"></div></div>
+  </div>
+  <button class="sn-finish" id="snFinishBtn">🏁 Finish &amp; submit run</button>
+  <button class="sn-incident" id="snIncidentBtn" type="button" aria-label="Flag an incident (you'll be asked about it when you finish)">⚠️ Flag incident</button>
+  <div class="compass-badge" aria-label="Points to true north">N<span class="tick" id="compassTick">▲</span></div>
+  <div class="hdg-debug" id="hdgDebug"></div>
+  <div class="zoom-cluster">
+    <button class="map-fab zoom-btn" id="zoomInFab" aria-label="Zoom in">+</button>
+    <button class="map-fab zoom-btn" id="zoomOutFab" aria-label="Zoom out">−</button>
+  </div>
+  <button class="map-fab" id="fsFab" aria-label="Full screen map">⛶</button>
+  <button class="map-fab" id="locateFab" aria-label="Centre on me">◎</button>
+  <button class="fs-exit" id="fsExit" style="display:none;">✕ Exit full screen</button>
+  <div class="fs-pax-wrap" id="fsPaxWrap">
+    <div class="fs-pax" id="fsPax">
+      <button class="fs-pax-btn undo" id="fsPaxUndo" aria-label="Undo last boarding (correct a mistaken tap)">↶ Undo</button>
+      <div class="fs-pax-count" id="fsPaxCount">0</div>
+      <button class="fs-pax-btn on" id="fsPaxOn" aria-label="Passenger got on">+ Board</button>
+    </div>
+  </div>
+  <div class="empty-state" id="emptyState">
+    <div class="glyph">🧭</div>
+    <h2>No routes yet</h2>
+    <p id="emptyMsg">Your company has no routes yet. An administrator can add them from the Admin screen.</p>
+    <button class="chip-btn use" id="emptyAdminBtn" style="display:none">Open Admin screen</button>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="stats-row">
+    <div class="stat">
+      <div class="stat-label">SPEED</div>
+      <div class="stat-value"><span id="statSpeed">–</span><small> mph</small></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">OFF ROUTE</div>
+      <div class="stat-value"><span id="statDist">–</span><small id="statDistUnit"></small></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">NEAREST STOP</div>
+      <div class="stat-value" style="font-size:18px;"><span id="statStop">–</span></div>
+      <div class="stat-sub" id="statStopDist"></div>
+    </div>
+  </div>
+
+  <div class="all-done-card" id="allDoneCard">
+    <div class="ad-title">✔ All today’s runs done</div>
+    <div class="ad-sub">Every route you picked for today has been submitted. Open another route from the list if you need one.</div>
+    <button class="chip-btn use" id="allDoneRoutes">☰ Show routes</button>
+    <button class="chip-btn" id="allDoneDefect" type="button">📝 End of duty – defect report</button>
+  </div>
+  <div class="pax-row" id="paxRowMap">
+    <div class="pax-info">
+      <div class="pax-label">ONBOARD</div>
+      <div class="pax-count" id="paxCountMap">0</div>
+    </div>
+    <button class="pax-btn undo" data-pax="undo" aria-label="Undo last boarding (correct a mistaken tap)">↶ Undo</button>
+    <button class="pax-btn on" data-pax="on">+ Board</button>
+    <button class="pax-reset" data-pax="reset" aria-label="Reset count">↺</button>
+  </div>
+
+  <button class="track-btn satnav-btn" id="satnavBtn">🛰️  Start Sat-Nav mode</button>
+  <button class="track-btn" id="trackBtn" style="display:none">▶  Start GPS tracking</button>
+  <button class="track-btn nav-btn" id="firstStopBtn">📍  Directions to first stop</button>
+  <div class="gps-note" id="guideNote"></div>
+  <button class="track-btn incident-btn" id="incidentBtn" type="button" disabled>⚠️ Flag incident</button>
+  <button class="track-btn nav-btn" id="navBtn" style="display:none">🧭  Navigate this route in Google Maps ↗</button>
+  <button class="track-btn nav-btn" id="previewBtn">🎬  Preview this route</button>
+  <button class="track-btn finish-btn" id="finishRunBtn" style="display:none">🏁  Finish &amp; submit run</button>
+  <div class="run-pending" id="runPending" style="display:none"><span id="runPendingText"></span><button class="chip-btn use" id="runPendingRetry">Retry</button></div>
+  <div class="gps-note" id="gpsNote"></div>
+</div>
+</div>
+
+<div id="scheduleView" class="view">
+  <div class="sched-body" id="schedBody"></div>
+</div>
+</div>
+
+<!-- Finish & submit run: confirm summary -->
+<div class="modal-back" id="runModal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="runTitle">
+  <div class="modal">
+    <h2 id="runTitle">Finish &amp; submit run</h2>
+    <div id="runBody"></div>
+    <div class="run-msg" id="runMsg" role="status"></div>
+    <div class="modal-btns">
+      <button class="btn" id="runCancel" type="button">Cancel</button>
+      <button class="btn primary" id="runSubmit" type="button">Submit</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-handle"></div>
+  <div class="drawer-head"><h2>Your routes</h2><button class="icon-btn" id="drawerClose">✕</button></div>
+  <div class="drawer-body">
+    <div class="acct-box">
+      <div class="acct-line" id="acctLine"></div>
+      <div class="acct-actions">
+        <button class="chip-btn use" id="acctAdmin" style="display:none">⚙ Admin screen</button>
+        <button class="chip-btn" id="acctSignOut">Sign out</button>
+      </div>
+      <button class="chip-btn acct-defect" id="acctDefect" type="button">📝 End of duty – defect report</button>
+    </div>
+    <div class="svc-bar" id="svcBar" style="display:none"><span class="muted">Today:</span><span class="svc-today" id="svcToday"></span><button class="chip-btn" id="svcChange" type="button">Change today’s jobs</button></div>
+    <div class="rt-tabs" id="rtTabs"></div>
+    <div id="routeList"></div>
+  </div>
+</div>
+</div>
+
+<script src="vendor/leaflet.js"></script>
+<script src="vendor/leaflet-rotate.js"></script>
+<script src="js/driver-app.js?v=18"></script>
+<script type="module" src="js/main.js?v=19"></script>
+</body>
+</html>
