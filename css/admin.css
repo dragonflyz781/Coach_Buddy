@@ -534,3 +534,6 @@ body.vc-open .toast.drv{ display:none; }
 .vc-ask-btns{ display:flex; flex-direction:column; gap:10px; max-width:420px; margin:0 auto; }
 .vc-ask-btns .vc-big{ flex:0 0 auto; width:100%; min-height:58px; font-size:17px; }
 .vc-regpick select{ font:inherit; font-size:16px; padding:10px; border-radius:10px; border:1.5px solid var(--line); background:var(--surface); color:var(--text); width:100%; margin:0 0 6px; }
+
+/* ===== v20: "First use check already done on <REG> today by <name> at <time>" ===== */
+.vc-link{ background:none; border:none; color:var(--route); font:inherit; font-size:15px; font-weight:600; text-decoration:underline; padding:10px; cursor:pointer; }
