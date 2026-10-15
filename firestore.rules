@@ -13,6 +13,9 @@ rules_version = '2';
 //   companies/{companyId}/dayPlans/{uid}_{YYYY-MM-DD}
 //                                        a driver's plan for one duty day (05:00-05:00 London): today's picks, vehicle and
 //                                        the routes already submitted (v15). Only that driver writes it; admins can read it.
+//   companies/{companyId}/vehicleChecks/{vehicleKey}_{day}
+//                                        v20: "this vehicle had its first use check today, by <name> at <time>" - readable
+//                                        by every driver of the company (written with the driver's own white sheet).
 //   companies/{companyId}/defects/{id}   vehicle checks (v18): the white "1st use pre drive away check" (kind 'predrive') and
 //                                        the pink "end of duty defect report" (kind 'endofduty'). Written once by the driver;
 //                                        admins read all, maintenance reads only the ones with a defect (hasDefect == true);
@@ -160,6 +163,38 @@ service cloud.firestore {
         allow read:           if (isDriverOrAdmin(companyId) && ownPlanId()) || isAdmin(companyId);
         allow create, update: if isDriverOrAdmin(companyId) && ownPlanId() && validPlan(request.resource.data);
         allow delete:         if isDriverOrAdmin(companyId) && ownPlanId();
+      }
+
+      // ------------------------------------------------------------- vehicleChecks (v20)
+      // One small document per vehicle per duty day, id "<vehicleKey>_<YYYY-MM-DD>", written when a white first-use
+      // check is submitted. Every driver / admin of the company can read it, so the next driver of that vehicle today
+      // (after a vehicle swap) sees it was already checked, without being able to read other drivers' defect sheets.
+      //   { vehicleKey, vehicleId?, vehicleReg, dutyDay, driverUid (== the signed-in user), driverName,
+      //     defectId (their own white sheet in defects/), hasDefect?, at (server time) }
+      // A later check of the same vehicle that day overwrites it. Maintenance: no access. Admins may delete.
+      match /vehicleChecks/{checkId} {
+        function sheetPath(id) { return /databases/$(database)/documents/companies/$(companyId)/defects/$(id); }
+        function validCheck(d) {
+          return d.keys().hasOnly(['vehicleKey','vehicleId','vehicleReg','dutyDay','driverUid','driverName','defectId','hasDefect','at'])
+              && d.keys().hasAll(['vehicleKey','vehicleReg','dutyDay','driverUid','driverName','defectId','at'])
+              && d.vehicleKey is string && d.vehicleKey.matches('^[A-Za-z0-9-]{1,128}$')
+              && d.dutyDay is string && d.dutyDay.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+              && checkId == d.vehicleKey + '_' + d.dutyDay
+              && d.driverUid == request.auth.uid
+              && d.driverName is string && d.driverName.size() <= 120
+              && d.vehicleReg is string && d.vehicleReg.size() <= 20
+              && (!('vehicleId' in d) || (d.vehicleId is string && d.vehicleId.size() <= 128))
+              && (!('hasDefect' in d) || d.hasDefect is bool)
+              && d.defectId is string && d.defectId.size() <= 128
+              && exists(sheetPath(d.defectId))
+              && get(sheetPath(d.defectId)).data.kind == 'predrive'
+              && get(sheetPath(d.defectId)).data.driverUid == request.auth.uid
+              && get(sheetPath(d.defectId)).data.dutyDay == d.dutyDay
+              && d.at == request.time;
+        }
+        allow read:           if isDriverOrAdmin(companyId);
+        allow create, update: if isDriverOrAdmin(companyId) && validCheck(request.resource.data);
+        allow delete:         if isAdmin(companyId);
       }
 
       // ----------------------------------------------------------------- runs
