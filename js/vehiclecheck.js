@@ -27,7 +27,7 @@ const vKey = (v) => (v && (v.id || v.reg)) || "none";
 const recKey = () => "rt_vc_" + ctx.companyId + "_" + ctx.user.uid;
 function readRec(day) {
   try { const r = JSON.parse(localStorage.getItem(recKey()) || "null"); if (r && r.day === day) return r; } catch (e) { /* ignore */ }
-  return { day, predrive: {}, end: {}, no: {} };
+  return { day, predrive: {}, end: {} };
 }
 function writeRec(r) { try { localStorage.setItem(recKey(), JSON.stringify(r)); } catch (e) { /* ignore */ } }
 function remember(day, kind, v, info) {
@@ -67,9 +67,40 @@ async function doneInfo(kind, day, v) {
 async function done(kind, day, v) { return !!(await doneInfo(kind, day, v)); }
 export const predriveDone = (day, v) => done("predrive", day, v);
 export const predriveInfo = (day, v) => doneInfo("predrive", day, v);
-/* v19: the driver answered "No" to "Do you need to do a first use check?" - kept on this phone only (no rules change) */
-export function rememberNoCheck(day, v) { const r = readRec(day); r.no = r.no || {}; r.no[vKey(v)] = Date.now(); writeRec(r); }
-export function saidNoToday(day, v) { const r = readRec(day); return !!(r.no && r.no[vKey(v)]); }
+/* ---------------------------------------------------------------- v20: first use check per vehicle per duty day, by ANY driver
+   companies/{cid}/vehicleChecks/{vehicleKey}_{day} is written with each white sheet (see firestore.rules); every driver of
+   the company can read it, so after a vehicle swap the next driver isn't asked to check the vehicle again. */
+export function vehicleKey(v) {
+  const clean = (x) => String(x || "").toUpperCase().replace(/[^A-Za-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
+  return v && v.id ? String(v.id).replace(/[^A-Za-z0-9-]+/g, "-").slice(0, 128) : "reg-" + (clean(v && v.reg) || "none");
+}
+const checkRef = (day, v) => doc(ctx.db, "companies", ctx.companyId, "vehicleChecks", vehicleKey(v) + "_" + day);
+async function writeVehicleCheck(defectId, data) {
+  const v = { id: data.vehicleId, reg: data.vehicleReg };
+  const d = { vehicleKey: vehicleKey(v), vehicleReg: data.vehicleReg, dutyDay: data.dutyDay, driverUid: data.driverUid,
+    driverName: data.driverName, defectId, hasDefect: !!data.hasDefect, at: serverTimestamp() };
+  if (data.vehicleId) d.vehicleId = data.vehicleId;
+  try { await setDoc(checkRef(data.dutyDay, v), d); }
+  catch (e) { console.info("Vehicle check marker not saved (" + ((e && e.code) || e) + ") - publish the v20 Firestore rules"); }
+}
+/* -> null, or { by: driver name, at: ms, mine: bool } - today's first use check of this vehicle by anyone */
+export async function findVehicleCheck(day, v) {
+  if (!v) return null;
+  try {
+    const snap = await Promise.race([
+      getDoc(checkRef(day, v)),
+      new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("timed out"), { code: "timeout" })), READ_TIMEOUT_MS))
+    ]);
+    if (snap.exists()) {
+      const c = snap.data();
+      if (c.dutyDay === day) return { by: String(c.driverName || "another driver"), at: toMillis(c.at), mine: c.driverUid === ctx.user.uid };
+    }
+  } catch (e) {
+    console.info("Vehicle check lookup not available (" + ((e && e.code) || e) + ") - using this driver's own sheets");
+  }
+  const own = await doneInfo("predrive", day, v);            // fallback: the driver's own sheet (this phone / pending / account)
+  return own ? { by: driverName(), at: own.at || 0, mine: true } : null;
+}
 export const endOfDutyDone = (day, v) => done("endofduty", day, v);
 export function startMileage(day, v) { const p = readRec(day).predrive[vKey(v)]; return p && typeof p.mileage === "number" ? p.mileage : null; }
 
@@ -84,6 +115,10 @@ function writeAllPending(fn) {
 const putPending = (p) => writeAllPending((a) => a.filter((x) => x.id !== p.id).concat([p]));
 const dropPending = (id) => writeAllPending((a) => a.filter((x) => x.id !== id));
 async function send(id, data) {
+  await sendSheet(id, data);
+  if (data.kind === "predrive") await writeVehicleCheck(id, data);       // v20
+}
+async function sendSheet(id, data) {
   if (navigator.onLine === false) throw Object.assign(new Error("offline"), { code: "offline" });
   const ref = doc(ctx.db, "companies", ctx.companyId, "defects", id);
   try {
@@ -153,24 +188,22 @@ function resultCard(kind, defect, lines, res, startNote) {
 
 /* ================================================================ v19: "Do you need to do a first use check?" */
 const hhmm = (ms) => new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(ms));
-export function askFirstUse(o) {
-  // o: { vehicle: { id?, reg }, done: false | { at } }  ->  resolves 'yes' | 'no'
+/* v20: the vehicle already had its first use check today (by anyone): Continue, or do another check */
+export function showAlreadyChecked(o) {
+  // o: { vehicle: { id?, reg }, check: { by, at, mine } }  ->  resolves 'continue' | 'again'
   return new Promise((resolve) => {
-    const v = o.vehicle || {}, d = o.done;
-    show('<div class="vc-paper white vc-ask" data-sheet="firstuse" data-done="' + (d ? "1" : "0") + '">' +
+    const v = o.vehicle || {}, c = o.check || {};
+    show('<div class="vc-paper white vc-ask" data-sheet="checked">' +
       '<div class="vc-head"><h2 id="vcTitle">First use check</h2><div class="vc-sub">' + esc(driverName()) + "</div></div>" +
       '<div class="vc-ask-reg" id="vcAskReg">' + esc(v.reg || "—") + "</div>" +
-      (d ? '<div class="vc-ask-done" id="vcAskDone">✔ Already checked today' + (d.at ? " at " + hhmm(d.at) : "") + "</div>" +
-           '<p class="vc-ask-q" id="vcAskQ">The first use check for <b>' + esc(v.reg) + "</b> has been done. Carry on, or do the check again if you need to.</p>" +
-           '<div class="vc-ask-btns"><button type="button" class="btn primary vc-big" id="vcAskNo">Continue – already checked</button>' +
-           '<button type="button" class="btn vc-big" id="vcAskYes">Do the check again</button></div>'
-         : '<p class="vc-ask-q" id="vcAskQ">Do you need to do a first use check on <b>' + esc(v.reg) + "</b>?</p>" +
-           '<div class="vc-ask-btns"><button type="button" class="btn primary vc-big" id="vcAskYes">Yes – do the check</button>' +
-           '<button type="button" class="btn vc-big" id="vcAskNo">No – already done / not first use</button></div>') +
-      "</div>");
-    $("vcAskYes").addEventListener("click", () => { hide(); resolve("yes"); });
-    $("vcAskNo").addEventListener("click", () => { hide(); resolve("no"); });
-    setTimeout(() => { const b = $(d ? "vcAskNo" : "vcAskYes"); if (b) b.focus(); }, 0);
+      '<div class="vc-ask-done" id="vcAskDone">✔ First use check already done on ' + esc(v.reg) + " today by " + esc(c.mine ? c.by + " (you)" : c.by) +
+        (c.at ? " at " + hhmm(c.at) : "") + "</div>" +
+      '<p class="vc-ask-q">You don’t need to check this vehicle again before driving.</p>' +
+      '<div class="vc-ask-btns"><button type="button" class="btn primary vc-big" id="vcCheckedContinue">Continue</button>' +
+      '<button type="button" class="vc-link" id="vcCheckAgain">Do another check</button></div></div>');
+    $("vcCheckedContinue").addEventListener("click", () => { hide(); resolve("continue"); });
+    $("vcCheckAgain").addEventListener("click", () => { hide(); resolve("again"); });
+    setTimeout(() => { const b = $("vcCheckedContinue"); if (b) b.focus(); }, 0);
   });
 }
 

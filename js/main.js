@@ -12,8 +12,8 @@ import { isConfigured, isEmulator, auth, db } from "./firebase-init.js?v=16";
 import { $, setView, toast, friendlyError, readServicePick, wireServicePick } from "./ui.js?v=16";
 import { decodePolyline, densify } from "./geo.js?v=16";
 import { initAdmin, showAdmin, onRoutesChanged, onCompanyChanged, onVehiclesChanged } from "./admin.js?v=18";
-import { initVehicleCheck, predriveInfo, endOfDutyDone, openPredrive, openEndOfDuty, isSheetOpen, askFirstUse, rememberNoCheck, saidNoToday }
-  from "./vehiclecheck.js?v=19";
+import { initVehicleCheck, findVehicleCheck, endOfDutyDone, openPredrive, openEndOfDuty, isSheetOpen, showAlreadyChecked }
+  from "./vehiclecheck.js?v=20";
 import { showMaintenance, stopDefectLists } from "./defectlist.js?v=18";
 import { resolveOperator } from "./operator.js?v=16";
 import { pickedServiceTypes, welcomeName, selLabel, selMatches, encodeSel, decodeSel, picksFromSel, routeRank, routeSlotLabel,
@@ -390,18 +390,21 @@ function currentVehicle() {
   const v = session.vehicles[session.vehicleId];
   return { id: session.vehicleId, reg: String((v && v.reg) || (session.plan && session.plan.vehicleReg) || "").slice(0, 20) };
 }
-/* picked: true right after the vehicle tap on the welcome screen (always ask, showing "Already checked today at hh:mm" when done);
-   false when today's plan is restored (reload / another phone): only ask if the driver hasn't answered for this vehicle yet */
+/* v20: first use check per vehicle per duty day, by ANY driver of the company.
+   picked: true right after the vehicle tap on the welcome screen; false when today's plan is restored (reload / another phone).
+   Already checked today (by anyone) -> right after a pick: "First use check already done on <REG> today by <name> at <time>"
+   with Continue (or "Do another check"); on a restore: nothing to show. Not checked -> the white sheet is REQUIRED. */
 async function vehicleGate(picked) {
   const v = currentVehicle();
-  if (!v || !session.user) return;                       // no vehicle picked (or the company has no vehicles): nothing to ask
+  if (!v || !session.user) return;                       // no vehicle picked (or the company has no vehicles): nothing to check
   const day = dutyDay();
-  if (!picked && saidNoToday(day, v)) return;
-  const done = await predriveInfo(day, v);
-  if (!picked && done) return;
-  const ans = await askFirstUse({ vehicle: v, done });
-  if (ans === "yes") await openPredrive({ vehicle: v, day });
-  else rememberNoCheck(day, v);
+  const found = await findVehicleCheck(day, v);
+  if (found) {
+    if (!picked) return;
+    if ((await showAlreadyChecked({ vehicle: v, check: found })) === "again") await openPredrive({ vehicle: v, day });
+    return;
+  }
+  await openPredrive({ vehicle: v, day });
 }
 const fleetList = () => Object.values(session.vehicles || {}).filter((x) => x && x.reg)
   .map((x) => ({ id: x.id, reg: String(x.reg).slice(0, 20) })).sort((a, b) => a.reg.localeCompare(b.reg));
