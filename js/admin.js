@@ -12,6 +12,8 @@ import { validateVehicle, cleanVehicle, vehicleDims } from "./vehicles.js?v=16";
 import { parseGPX, fitTrack, decodePolyline, encodePolyline } from "./geo.js?v=16";
 import { initRuns } from "./runs.js?v=16";
 import { initAdminDefects } from "./defectlist.js?v=18";
+import { initAdminMessages, setMessageTeam, adminMessagesShown } from "./messages.js?v=21";
+import { initAdminDuties, setDutyTeam, refreshDutyLists } from "./duties.js?v=21";
 import { buildBackup, parseBackup, planRestore, backupFileName, routeFileName, MAX_RESTORE_ROUTES, MAX_RESTORE_BYTES } from "./backup.js?v=16";
 import { normOp, opEmpty, opEqual, validateOperator, routeIsCustom, planApply, OP_LIMITS } from "./operator.js?v=16";
 
@@ -32,6 +34,8 @@ export function initAdmin(c) {
   subscribeUsers();
   initRuns(c);
   initAdminDefects(c);                     // v18: Vehicle defects tab
+  initAdminMessages(c);                    // v21: Messages tab
+  initAdminDuties(c, () => rawRoutes, () => rawVehicles);   // v21: Duties tab
   fillOperatorForm(); renderApplyInfo(); fillServiceForm();
 }
 
@@ -42,13 +46,13 @@ export function showAdmin() {
 
 export function onRoutesChanged(raw) {
   rawRoutes = raw;
-  if (ctx) { renderRouteList(); renderApplyInfo(); }
+  if (ctx) { renderRouteList(); renderApplyInfo(); refreshDutyLists(); }
 }
 
 /* the company doc changed (live listener in main.js) */
 export function onVehiclesChanged(raw) {
   rawVehicles = raw || {};
-  if (ctx) renderVehicleList();
+  if (ctx) { renderVehicleList(); refreshDutyLists(); }
 }
 
 export function onCompanyChanged(company) {
@@ -81,7 +85,7 @@ function wire() {
 /* =============================================================== tabs */
 /* Routes / Operator details / Drivers / Runs: each is its own tab, exactly one panel is shown at a time,
    the active tab is highlighted, and the last tab is remembered across a refresh (localStorage 'rt_admin_tab'). */
-const ADMIN_TABS = [["Routes", "admRoutes"], ["Operator", "admOperator"], ["Drivers", "admDrivers"], ["Vehicles", "admVehicles"], ["Runs", "admRuns"], ["Defects", "admDefects"]];
+const ADMIN_TABS = [["Routes", "admRoutes"], ["Operator", "admOperator"], ["Drivers", "admDrivers"], ["Vehicles", "admVehicles"], ["Runs", "admRuns"], ["Defects", "admDefects"], ["Messages", "admMessages"], ["Duties", "admDuties"]];
 const TAB_KEY = "rt_admin_tab";
 function showTab(name, save) {
   if (!ADMIN_TABS.some(([n]) => n === name)) name = "Routes";
@@ -95,6 +99,7 @@ function showTab(name, save) {
   const act = $("admTab" + name);
   if (act.scrollIntoView) act.scrollIntoView({ block: "nearest", inline: "nearest" });
   moveBus(name, !!save || busReady);
+  if (name === "Messages") adminMessagesShown();      // v21: read receipts for the open thread
   if (save) { try { localStorage.setItem(TAB_KEY, name); } catch (e) { /* ignore */ } }
 }
 /* the little bus drives along the road under the tab bar to sit beneath whichever tab is open */
@@ -885,7 +890,7 @@ function subscribeUsers() {
   if (unsubUsers) unsubUsers();
   unsubUsers = onSnapshot(
     query(collection(ctx.db, "users"), where("companyId", "==", ctx.companyId)),
-    (snap) => renderUsers(snap.docs.map((d) => ({ uid: d.id, ...d.data() }))),
+    (snap) => { const team = snap.docs.map((d) => ({ uid: d.id, ...d.data() })); setMessageTeam(team); setDutyTeam(team); renderUsers(team); },
     (err) => toast("Could not load team: " + friendlyError(err), true)
   );
 }

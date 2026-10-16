@@ -11,7 +11,9 @@ import {
 import { isConfigured, isEmulator, auth, db } from "./firebase-init.js?v=16";
 import { $, setView, toast, friendlyError, readServicePick, wireServicePick } from "./ui.js?v=16";
 import { decodePolyline, densify } from "./geo.js?v=16";
-import { initAdmin, showAdmin, onRoutesChanged, onCompanyChanged, onVehiclesChanged } from "./admin.js?v=18";
+import { initAdmin, showAdmin, onRoutesChanged, onCompanyChanged, onVehiclesChanged } from "./admin.js?v=21";
+import { initDriverMessages, stopDriverMessages, stopAdminMessages } from "./messages.js?v=21";
+import { initDriverDuties, stopDriverDuties, stopAdminDuties, todayDuty } from "./duties.js?v=21";
 import { initVehicleCheck, findVehicleCheck, endOfDutyDone, openPredrive, openEndOfDuty, isSheetOpen, showAlreadyChecked }
   from "./vehiclecheck.js?v=20";
 import { showMaintenance, stopDefectLists } from "./defectlist.js?v=18";
@@ -93,6 +95,9 @@ async function startSession(user) {
     subscribeRoutes();
     configureRuns(user, profile);
     initVehicleCheck({ db, user, profile, companyId: session.companyId });     // v18: also sends sheets kept on this phone
+    // v21: messages (drivers; admins use the Messages tab) and "My duties" (anyone who drives)
+    if (profile.role === "driver") initDriverMessages({ db, user, profile, companyId: session.companyId });
+    initDriverDuties({ db, user, profile, companyId: session.companyId, getRoutes: () => session.rawRoutes, startRun: startDutyRun });
     if (profile.role === "admin") {
       initAdmin({ db, auth, user, profile, companyId: session.companyId, company: session.company, openDriver, signOutAndReset });
       showAdmin();
@@ -235,6 +240,7 @@ function runIncidents(list) {
 
 function teardown() {
   stopDefectLists();
+  stopDriverMessages(); stopAdminMessages(); stopDriverDuties(); stopAdminDuties();     // v21
   if (session.unsubRoutes) { session.unsubRoutes(); session.unsubRoutes = null; }
   if (session.unsubCompany) { session.unsubCompany(); session.unsubCompany = null; }
   if (session.unsubVehicles) { session.unsubVehicles(); session.unsubVehicles = null; }
@@ -355,6 +361,9 @@ export async function openDriver(opts) {
     const plan = await loadPlan(day);
     if (plan) { await applyPlan(plan); return; }
   }
+  // v21: today's duty (if the office set one) pre-selects its vehicle on the welcome screen - the driver can still change it
+  const duty = await todayDuty(1500);
+  const dutyVeh = (opts && opts.vehicleId) || (duty && duty.vehicleId);
   return runWelcome({
     name: welcomeName(session.user && session.user.displayName, session.profile && session.profile.name, session.user && session.user.email),
     company: session.company && session.company.name,
@@ -363,7 +372,7 @@ export async function openDriver(opts) {
     getVehicles: () => Object.values(session.vehicles || {}).sort((a, b) => String(a.reg || "").localeCompare(String(b.reg || ""))),
     routesReady: session.routesReady,
     last: lastPick(),
-    lastVehicleId: lastVehicleId(),
+    lastVehicleId: (dutyVeh && session.vehicles[dutyVeh]) ? dutyVeh : lastVehicleId(),
     onPick: storePick,
     onVehicle: storeVehicle
   }).then(async () => {
@@ -382,6 +391,18 @@ export async function openDriver(opts) {
     }
     showDriverView();
   });
+}
+
+/* ---------- v21: "Start this run" on today's duty worksheet -> the normal day plan / route flow ---------- */
+async function startDutyRun(routeId, duty) {
+  const RT = window.RoundTracker;
+  if (RT.runInProgress && RT.runInProgress()) { toast("Finish the run that is in progress first.", true); return; }
+  if (!session.rawRoutes || !session.rawRoutes[routeId]) { toast("That route is no longer in the route list – ask the office.", true); return; }
+  if (!(session.plan && session.plan.day === dutyDay())) {
+    // no jobs picked today yet: the welcome screen first (vehicle from the duty pre-selected), then that route
+    await openDriver({ vehicleId: duty && duty.vehicleId });   // (today's plan from another phone is restored instead)
+  } else if (!document.body.classList.contains("view-driver")) showDriverView();
+  if (!RT.openRoute || !RT.openRoute(routeId)) toast("Could not open that route right now (Sat-Nav or a run is under way).", true);
 }
 
 /* ---------- v18: vehicle sheets (white pre-drive check / pink end-of-duty defect report) ---------- */

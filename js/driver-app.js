@@ -2408,6 +2408,11 @@
     updateNextStop();
   }
   window.RoundTracker = {
+    // v21: "Start this run" on a duty worksheet - open that route (not while a run / Sat-Nav is under way)
+    openRoute: function(id){
+      if(!routes[id] || tracking || document.body.classList.contains('satnav-mode')) return false;
+      setActiveRoute(id); return true;
+    },
     // fresh: { routeId: routeObject } for the signed-in user's company (real-time)
     setRoutes: function(fresh){
       var old = activeId ? routes[activeId] : null;
