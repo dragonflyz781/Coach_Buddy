@@ -11,7 +11,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/leaflet.css">
 <link rel="stylesheet" href="css/app.css?v=17">      <!-- the original driver app styles, unchanged -->
-<link rel="stylesheet" href="css/admin.css?v=20">    <!-- sign-in, admin and layout additions -->
+<link rel="stylesheet" href="css/admin.css?v=21">    <!-- sign-in, admin and layout additions -->
 </head>
 <body class="view-boot">
 
@@ -114,6 +114,8 @@
     <button class="tab-btn" id="admTabVehicles" role="tab" aria-selected="false" aria-controls="admVehicles" tabindex="-1"><span class="tab-ico" aria-hidden="true">🚌</span><span class="tab-txt">Vehicles</span></button>
     <button class="tab-btn" id="admTabRuns" role="tab" aria-selected="false" aria-controls="admRuns" tabindex="-1"><span class="tab-ico" aria-hidden="true">📊</span><span class="tab-txt">Runs</span></button>
     <button class="tab-btn" id="admTabDefects" role="tab" aria-selected="false" aria-controls="admDefects" tabindex="-1"><span class="tab-ico" aria-hidden="true">🔧</span><span class="tab-txt">Vehicle defects</span><span class="tab-count" id="admDefectsCount" style="display:none" aria-label="open defects"></span></button>
+    <button class="tab-btn" id="admTabMessages" role="tab" aria-selected="false" aria-controls="admMessages" tabindex="-1"><span class="tab-ico" aria-hidden="true">💬</span><span class="tab-txt">Messages</span><span class="tab-count" id="admMessagesCount" style="display:none" aria-label="unread replies"></span></button>
+    <button class="tab-btn" id="admTabDuties" role="tab" aria-selected="false" aria-controls="admDuties" tabindex="-1"><span class="tab-ico" aria-hidden="true">📅</span><span class="tab-txt">Duties</span></button>
     <div class="tab-road" id="tabRoad" aria-hidden="true">
       <svg class="tab-bus" id="tabBus" viewBox="0 0 48 26" width="44" height="24">
         <g class="bus-flip">
@@ -248,6 +250,12 @@
     <section id="admDefects" role="tabpanel" aria-labelledby="admTabDefects" style="display:none">
       <div id="admDefectsBody"></div>
     </section>
+    <section id="admMessages" role="tabpanel" aria-labelledby="admTabMessages" style="display:none">
+      <div id="admMessagesBody"></div>
+    </section>
+    <section id="admDuties" role="tabpanel" aria-labelledby="admTabDuties" style="display:none">
+      <div id="admDutiesBody"></div>
+    </section>
   </main>
 </div>
 
@@ -274,6 +282,18 @@
 <!-- v18: white pre-drive check / pink end-of-duty defect report -->
 <div class="vc-overlay" id="vcOverlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="vcTitle"><div class="vc-sheet" id="vcSheet"></div></div>
 
+<!-- v21: driver messages / My duties sheet, and the pop-up for a new message -->
+<div class="mc-overlay" id="mcOverlay" style="display:none" role="dialog" aria-modal="true"><div class="mc-sheet" id="mcSheet"></div></div>
+<div class="msg-pop" id="msgPop" style="display:none" role="alertdialog" aria-labelledby="msgPopTitle" aria-describedby="msgPopText">
+  <div class="msg-pop-card">
+    <div class="msg-pop-title" id="msgPopTitle">💬 New message</div>
+    <div class="msg-pop-from" id="msgPopFrom"></div>
+    <div class="msg-pop-text" id="msgPopText"></div>
+    <div class="msg-pop-more" id="msgPopMore"></div>
+    <div class="msg-pop-btns"><button class="btn" type="button" id="msgPopReply">Reply</button><button class="btn primary" type="button" id="msgPopOk">Got it</button></div>
+  </div>
+</div>
+
 <div id="toast" class="toast" role="status"></div>
 
 <!-- ============ Driver view (the original app) ============ -->
@@ -284,8 +304,11 @@
     <h1 id="routeName">Round Tracker</h1>
     <div class="sub" id="routeSub">No route loaded</div>
   </div>
+  <button class="icon-btn badge-btn" id="dutyBtn" aria-label="My duties" style="display:none">📅<span class="hdr-badge" id="dutyBadge" hidden></span></button>
+  <button class="icon-btn badge-btn" id="msgBtn" aria-label="Messages" style="display:none">✉<span class="hdr-badge" id="msgBadge" hidden></span></button>
   <button class="icon-btn theme-toggle" id="themeBtn" aria-label="Toggle theme">◐</button>
 </div>
+<button class="msg-fab" id="msgFab" type="button" aria-label="Messages">💬<span class="hdr-badge" id="msgFabBadge" hidden></span></button>
 
 <div class="tabs">
   <button class="tab-btn active" id="tabMapBtn">Map</button>
@@ -436,6 +459,10 @@
         <button class="chip-btn" id="acctSignOut">Sign out</button>
       </div>
       <button class="chip-btn acct-defect" id="acctDefect" type="button">📝 End of duty – defect report</button>
+      <div class="acct-actions acct-v21">
+        <button class="chip-btn badge-btn" id="acctDuties" type="button" style="display:none">📅 My duties<span class="hdr-badge" id="acctDutiesBadge" hidden></span></button>
+        <button class="chip-btn badge-btn" id="acctMsgs" type="button" style="display:none">💬 Messages<span class="hdr-badge" id="acctMsgsBadge" hidden></span></button>
+      </div>
     </div>
     <div class="svc-bar" id="svcBar" style="display:none"><span class="muted">Today:</span><span class="svc-today" id="svcToday"></span><button class="chip-btn" id="svcChange" type="button">Change today’s jobs</button></div>
     <div class="rt-tabs" id="rtTabs"></div>
@@ -446,7 +473,7 @@
 
 <script src="vendor/leaflet.js"></script>
 <script src="vendor/leaflet-rotate.js"></script>
-<script src="js/driver-app.js?v=18"></script>
-<script type="module" src="js/main.js?v=20"></script>
+<script src="js/driver-app.js?v=21"></script>
+<script type="module" src="js/main.js?v=21"></script>
 </body>
 </html>

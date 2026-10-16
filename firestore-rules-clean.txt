@@ -1,0 +1,234 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function profilePath(uid) { return /databases/$(database)/documents/users/$(uid); }
+    function hasProfile() { return signedIn() && exists(profilePath(request.auth.uid)); }
+    function myProfile() { return get(profilePath(request.auth.uid)).data; }
+    function inCompany(cid) { return hasProfile() && myProfile().companyId == cid; }
+    function isAdmin(cid)   { return inCompany(cid) && myProfile().role == 'admin'; }
+    function isDriverOrAdmin(cid) { return inCompany(cid) && myProfile().role in ['admin', 'driver']; }
+    function isMaintenance(cid)   { return inCompany(cid) && myProfile().role == 'maintenance'; }
+    match /users/{uid} {
+      allow read: if signedIn() && (uid == request.auth.uid || isAdmin(resource.data.companyId));
+      allow create: if signedIn() && uid == request.auth.uid
+                    && request.resource.data.keys().hasOnly(['companyId','role','name','email','createdAt'])
+                    && request.resource.data.role == 'admin'
+                    && request.resource.data.companyId is string
+                    && !exists(/databases/$(database)/documents/companies/$(request.resource.data.companyId))
+                    && getAfter(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.ownerUid == uid;
+      allow create: if signedIn() && uid != request.auth.uid
+                    && request.resource.data.keys().hasOnly(['companyId','role','name','email','createdAt'])
+                    && request.resource.data.role in ['driver', 'maintenance']
+                    && request.resource.data.companyId is string
+                    && isAdmin(request.resource.data.companyId);
+      allow update: if isAdmin(resource.data.companyId)
+                    && request.resource.data.companyId == resource.data.companyId
+                    && request.resource.data.role == resource.data.role;
+      allow delete: if isAdmin(resource.data.companyId) && uid != request.auth.uid;
+    }
+    match /companies/{companyId} {
+      allow read: if inCompany(companyId);
+      function validServiceTypes(t) {
+        return t is list && t.size() > 0 && t.size() <= 4
+            && t.hasOnly(['schools','colleges','rail','other'])
+            && t.toSet().size() == t.size();
+      }
+      allow create: if signedIn()
+                    && request.resource.data.keys().hasOnly(['name','ownerUid','createdAt','serviceTypes'])
+                    && (!('serviceTypes' in request.resource.data) || validServiceTypes(request.resource.data.serviceTypes))
+                    && request.resource.data.ownerUid == request.auth.uid
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120
+                    && !exists(profilePath(request.auth.uid));
+      function validOperator(o) {
+        return o is map
+            && o.keys().hasOnly(['name','address','tel','email'])
+            && o.keys().hasAll(['name'])
+            && o.name is string && o.name.trim().size() > 0 && o.name.size() <= 120
+            && (!('address' in o) || (o.address is string && o.address.size() <= 250))
+            && (!('tel' in o)     || (o.tel is string && o.tel.size() <= 40))
+            && (!('email' in o)   || (o.email is string && o.email.size() <= 120
+                                      && (o.email.size() == 0 || o.email.matches('^[^@ \\t\\r\\n]+@[^@ \\t\\r\\n]+\\.[^@ \\t\\r\\n]+$'))));
+      }
+      allow update: if isAdmin(companyId)
+                    && request.resource.data.ownerUid == resource.data.ownerUid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','operator','serviceTypes'])
+                    && (!('serviceTypes' in request.resource.data) || validServiceTypes(request.resource.data.serviceTypes))
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120
+                    && (!('operator' in request.resource.data) || validOperator(request.resource.data.operator));
+      allow delete: if false;
+      match /routes/{routeId} {
+        allow read:  if isDriverOrAdmin(companyId);
+        allow write: if isAdmin(companyId);
+      }
+      match /vehicles/{vehicleId} {
+        function dim(d, k, max) { return !(k in d) || d[k] == null || (d[k] is number && d[k] > 0 && d[k] <= max); }
+        function validVehicle(d) {
+          return d.keys().hasOnly(['reg','height','length','width','weight','createdAt','updatedAt','updatedBy'])
+              && d.reg is string && d.reg.trim().size() > 0 && d.reg.size() <= 20
+              && dim(d, 'height', 10) && dim(d, 'length', 30) && dim(d, 'width', 5) && dim(d, 'weight', 100)
+              && (!('updatedBy' in d) || d.updatedBy == request.auth.uid);
+        }
+        allow read:   if inCompany(companyId);
+        allow create, update: if isAdmin(companyId) && validVehicle(request.resource.data);
+        allow delete: if isAdmin(companyId);
+      }
+      match /dayPlans/{planId} {
+        function ownPlanId() { return planId.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$'); }
+        function validPlan(d) {
+          return d.keys().hasOnly(['uid','day','sel','vehicleId','vehicleReg','done','updatedAt'])
+              && d.keys().hasAll(['uid','day','sel','done','updatedAt'])
+              && d.uid == request.auth.uid
+              && d.day is string && planId == request.auth.uid + '_' + d.day
+              && d.sel is string && d.sel.size() <= 4000
+              && (!('vehicleId' in d)  || (d.vehicleId is string && d.vehicleId.size() <= 128))
+              && (!('vehicleReg' in d) || (d.vehicleReg is string && d.vehicleReg.size() <= 20))
+              && d.done is list && d.done.size() <= 200
+              && d.updatedAt == request.time;
+        }
+        allow read:           if (isDriverOrAdmin(companyId) && ownPlanId()) || isAdmin(companyId);
+        allow create, update: if isDriverOrAdmin(companyId) && ownPlanId() && validPlan(request.resource.data);
+        allow delete:         if isDriverOrAdmin(companyId) && ownPlanId();
+      }
+      match /vehicleChecks/{checkId} {
+        function sheetPath(id) { return /databases/$(database)/documents/companies/$(companyId)/defects/$(id); }
+        function validCheck(d) {
+          return d.keys().hasOnly(['vehicleKey','vehicleId','vehicleReg','dutyDay','driverUid','driverName','defectId','hasDefect','at'])
+              && d.keys().hasAll(['vehicleKey','vehicleReg','dutyDay','driverUid','driverName','defectId','at'])
+              && d.vehicleKey is string && d.vehicleKey.matches('^[A-Za-z0-9-]{1,128}$')
+              && d.dutyDay is string && d.dutyDay.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+              && checkId == d.vehicleKey + '_' + d.dutyDay
+              && d.driverUid == request.auth.uid
+              && d.driverName is string && d.driverName.size() <= 120
+              && d.vehicleReg is string && d.vehicleReg.size() <= 20
+              && (!('vehicleId' in d) || (d.vehicleId is string && d.vehicleId.size() <= 128))
+              && (!('hasDefect' in d) || d.hasDefect is bool)
+              && d.defectId is string && d.defectId.size() <= 128
+              && exists(sheetPath(d.defectId))
+              && get(sheetPath(d.defectId)).data.kind == 'predrive'
+              && get(sheetPath(d.defectId)).data.driverUid == request.auth.uid
+              && get(sheetPath(d.defectId)).data.dutyDay == d.dutyDay
+              && d.at == request.time;
+        }
+        allow read:           if isDriverOrAdmin(companyId);
+        allow create, update: if isDriverOrAdmin(companyId) && validCheck(request.resource.data);
+        allow delete:         if isAdmin(companyId);
+      }
+      match /messages/{msgId} {
+        function newMsg(d) {
+          return d.keys().hasOnly(['thread','fromUid','fromName','fromRole','text','at','readBy'])
+              && d.keys().hasAll(['thread','fromUid','fromName','fromRole','text','at','readBy'])
+              && d.thread is string && d.thread.size() >= 1 && d.thread.size() <= 128
+              && d.fromUid == request.auth.uid
+              && d.fromName is string && d.fromName.size() <= 120
+              && d.text is string && d.text.size() >= 1 && d.text.size() <= 1000
+              && d.at == request.time
+              && d.readBy is map && d.readBy.size() == 0;
+        }
+        function canSee() {
+          return isAdmin(companyId) || (isDriverOrAdmin(companyId) && resource.data.thread in ['all', request.auth.uid]);
+        }
+        allow read:   if canSee();
+        allow create: if (isAdmin(companyId) && newMsg(request.resource.data) && request.resource.data.fromRole == 'admin')
+                      || (inCompany(companyId) && myProfile().role == 'driver' && newMsg(request.resource.data)
+                          && request.resource.data.fromRole == 'driver' && request.resource.data.thread == request.auth.uid);
+        allow update: if canSee()
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
+                      && request.resource.data.readBy is map
+                      && request.resource.data.readBy.diff(resource.data.readBy).affectedKeys().hasOnly([request.auth.uid])
+                      && request.resource.data.readBy[request.auth.uid] == request.time;
+        allow delete: if isAdmin(companyId);
+      }
+      match /duties/{dutyId} {
+        function validDuty(d) {
+          return d.keys().hasOnly(['date','driverUid','driverName','dutyNo','vehicleId','vehicleReg','note','rows','updatedAt','updatedBy'])
+              && d.keys().hasAll(['date','driverUid','driverName','dutyNo','rows','updatedAt','updatedBy'])
+              && d.date is string && d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+              && d.driverUid is string && dutyId == d.driverUid + '_' + d.date
+              && d.driverName is string && d.driverName.size() <= 120
+              && d.dutyNo is string && d.dutyNo.size() >= 1 && d.dutyNo.size() <= 20
+              && (!('vehicleId' in d) || (d.vehicleId is string && d.vehicleId.size() <= 128))
+              && (!('vehicleReg' in d) || (d.vehicleReg is string && d.vehicleReg.size() <= 20))
+              && (!('note' in d) || (d.note is string && d.note.size() <= 500))
+              && d.rows is list && d.rows.size() <= 40
+              && d.updatedAt == request.time && d.updatedBy == request.auth.uid
+              && exists(profilePath(d.driverUid))
+              && get(profilePath(d.driverUid)).data.companyId == companyId;
+        }
+        allow read:           if isAdmin(companyId) || (isDriverOrAdmin(companyId) && resource.data.driverUid == request.auth.uid);
+        allow create, update: if isAdmin(companyId) && validDuty(request.resource.data);
+        allow delete:         if isAdmin(companyId);
+      }
+      match /runs/{runId} {
+        function isCount(v) { return v is int && v >= 0 && v <= 100000; }
+        function validRun(d) {
+          return d.keys().hasOnly(['routeId','routeName','session','driverUid','driverName','startedAt','submittedAt',
+                                   'totalBoarded','totalAlighted','unscheduledBoarded','unscheduledAlighted','stops','vehicleReg',
+                                   'incidents'])
+              && (!('vehicleReg' in d) || (d.vehicleReg is string && d.vehicleReg.size() <= 20))
+              && (!('incidents' in d) || (d.incidents is list && d.incidents.size() <= 20))
+              && d.keys().hasAll(['routeId','routeName','session','driverUid','driverName','startedAt','submittedAt',
+                                  'totalBoarded','totalAlighted','unscheduledBoarded','unscheduledAlighted','stops'])
+              && d.routeId is string && d.routeId.size() > 0 && d.routeId.size() <= 128
+              && d.routeName is string && d.routeName.size() <= 200
+              && d.session is string && d.session.size() <= 10
+              && d.driverUid == request.auth.uid
+              && d.driverName is string && d.driverName.size() <= 120
+              && d.startedAt is timestamp
+              && d.submittedAt == request.time
+              && isCount(d.totalBoarded) && isCount(d.totalAlighted)
+              && isCount(d.unscheduledBoarded) && isCount(d.unscheduledAlighted)
+              && d.stops is list && d.stops.size() <= 500;
+        }
+        allow create: if isDriverOrAdmin(companyId) && validRun(request.resource.data);
+        allow read:   if isAdmin(companyId) || (isDriverOrAdmin(companyId) && resource.data.driverUid == request.auth.uid);
+        allow update: if false;
+        allow delete: if isAdmin(companyId);
+      }
+      match /defects/{defectId} {
+        function optStr(d, k, max) { return !(k in d) || (d[k] is string && d[k].size() <= max); }
+        function optMiles(d, k)    { return !(k in d) || (d[k] is number && d[k] >= 0 && d[k] <= 10000000); }
+        function validSheet(d) {
+          return d.keys().hasOnly(['kind','vehicleId','vehicleReg','driverUid','driverName','dutyDay','dutyNo','mileage','startMileage',
+                                   'endMileage','items','notes','defects','nil','hasDefect','signature','signedName','createdAt','status'])
+              && d.keys().hasAll(['kind','vehicleReg','driverUid','driverName','dutyDay','nil','hasDefect','createdAt','status'])
+              && d.kind in ['predrive', 'endofduty']
+              && d.driverUid == request.auth.uid
+              && d.driverName is string && d.driverName.size() <= 120
+              && d.vehicleReg is string && d.vehicleReg.size() <= 20
+              && optStr(d, 'vehicleId', 128) && optStr(d, 'dutyNo', 40) && optStr(d, 'signedName', 120)
+              && d.dutyDay is string && d.dutyDay.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+              && optMiles(d, 'mileage') && optMiles(d, 'startMileage') && optMiles(d, 'endMileage')
+              && (!('items' in d) || (d.items is map && d.items.size() <= 30))
+              && (!('notes' in d) || (d.notes is map && d.notes.size() <= 30))
+              && (!('defects' in d) || (d.defects is list && d.defects.size() <= 3))
+              && (!('signature' in d) || (d.signature is string && d.signature.size() <= 70000
+                                          && d.signature.matches('^data:image/(png|jpeg);base64,.*')))
+              && d.nil is bool && d.hasDefect is bool && d.nil == !d.hasDefect
+              && d.status == (d.hasDefect ? 'open' : 'nil')
+              && d.createdAt == request.time;
+        }
+        allow create: if isDriverOrAdmin(companyId) && validSheet(request.resource.data);
+        allow read:   if isAdmin(companyId)
+                      || (isDriverOrAdmin(companyId) && resource.data.driverUid == request.auth.uid)
+                      || (isMaintenance(companyId) && resource.data.hasDefect == true);
+        allow update: if (isAdmin(companyId) || (isMaintenance(companyId) && resource.data.hasDefect == true))
+                      && resource.data.status == 'open'
+                      && request.resource.data.diff(resource.data).affectedKeys()
+                           .hasOnly(['status','rectifiedBy','rectifiedOn','rectifiedNote','rectifiedAt','rectifiedUid'])
+                      && request.resource.data.status == 'rectified'
+                      && request.resource.data.rectifiedBy is string
+                      && request.resource.data.rectifiedBy.size() > 0 && request.resource.data.rectifiedBy.size() <= 120
+                      && request.resource.data.rectifiedOn is string && request.resource.data.rectifiedOn.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+                      && (!('rectifiedNote' in request.resource.data) || (request.resource.data.rectifiedNote is string
+                                                                         && request.resource.data.rectifiedNote.size() <= 500))
+                      && request.resource.data.rectifiedAt == request.time
+                      && request.resource.data.rectifiedUid == request.auth.uid;
+        allow delete: if isAdmin(companyId);
+      }
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

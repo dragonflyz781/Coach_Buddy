@@ -16,6 +16,12 @@ rules_version = '2';
 //   companies/{companyId}/vehicleChecks/{vehicleKey}_{day}
 //                                        v20: "this vehicle had its first use check today, by <name> at <time>" - readable
 //                                        by every driver of the company (written with the driver's own white sheet).
+//   companies/{companyId}/messages/{id} v21: office <-> driver messages { thread: 'all' (broadcast) | <driverUid>, fromUid,
+//                                        fromName, fromRole, text, at, readBy: { uid: time } }. A driver reads broadcasts + their
+//                                        own thread, writes only replies in their own thread and their own read receipts.
+//   companies/{companyId}/duties/{driverUid}_{YYYY-MM-DD}
+//                                        v21: a driver's duty worksheet for one day (duty no., vehicle, time + description rows).
+//                                        Admins write; a driver reads only their own.
 //   companies/{companyId}/defects/{id}   vehicle checks (v18): the white "1st use pre drive away check" (kind 'predrive') and
 //                                        the pink "end of duty defect report" (kind 'endofduty'). Written once by the driver;
 //                                        admins read all, maintenance reads only the ones with a defect (hasDefect == true);
@@ -194,6 +200,59 @@ service cloud.firestore {
         }
         allow read:           if isDriverOrAdmin(companyId);
         allow create, update: if isDriverOrAdmin(companyId) && validCheck(request.resource.data);
+        allow delete:         if isAdmin(companyId);
+      }
+
+      // ------------------------------------------------------------- messages (v21)
+      // Admins: read everything, send (as 'admin', to 'all' or a driver's thread), delete. Drivers: read 'all' + their own
+      // thread, send only replies (as 'driver') in their own thread. Anyone who can read a message may add ONLY their own
+      // read receipt (readBy.<own uid> = server time). Maintenance: no access.
+      match /messages/{msgId} {
+        function newMsg(d) {
+          return d.keys().hasOnly(['thread','fromUid','fromName','fromRole','text','at','readBy'])
+              && d.keys().hasAll(['thread','fromUid','fromName','fromRole','text','at','readBy'])
+              && d.thread is string && d.thread.size() >= 1 && d.thread.size() <= 128
+              && d.fromUid == request.auth.uid
+              && d.fromName is string && d.fromName.size() <= 120
+              && d.text is string && d.text.size() >= 1 && d.text.size() <= 1000
+              && d.at == request.time
+              && d.readBy is map && d.readBy.size() == 0;
+        }
+        function canSee() {
+          return isAdmin(companyId) || (isDriverOrAdmin(companyId) && resource.data.thread in ['all', request.auth.uid]);
+        }
+        allow read:   if canSee();
+        allow create: if (isAdmin(companyId) && newMsg(request.resource.data) && request.resource.data.fromRole == 'admin')
+                      || (inCompany(companyId) && myProfile().role == 'driver' && newMsg(request.resource.data)
+                          && request.resource.data.fromRole == 'driver' && request.resource.data.thread == request.auth.uid);
+        allow update: if canSee()
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
+                      && request.resource.data.readBy is map
+                      && request.resource.data.readBy.diff(resource.data.readBy).affectedKeys().hasOnly([request.auth.uid])
+                      && request.resource.data.readBy[request.auth.uid] == request.time;
+        allow delete: if isAdmin(companyId);
+      }
+
+      // --------------------------------------------------------------- duties (v21)
+      // id "<driverUid>_<YYYY-MM-DD>"; the driver must be a user of this company. Admins: full control. Drivers: read their own.
+      match /duties/{dutyId} {
+        function validDuty(d) {
+          return d.keys().hasOnly(['date','driverUid','driverName','dutyNo','vehicleId','vehicleReg','note','rows','updatedAt','updatedBy'])
+              && d.keys().hasAll(['date','driverUid','driverName','dutyNo','rows','updatedAt','updatedBy'])
+              && d.date is string && d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+              && d.driverUid is string && dutyId == d.driverUid + '_' + d.date
+              && d.driverName is string && d.driverName.size() <= 120
+              && d.dutyNo is string && d.dutyNo.size() >= 1 && d.dutyNo.size() <= 20
+              && (!('vehicleId' in d) || (d.vehicleId is string && d.vehicleId.size() <= 128))
+              && (!('vehicleReg' in d) || (d.vehicleReg is string && d.vehicleReg.size() <= 20))
+              && (!('note' in d) || (d.note is string && d.note.size() <= 500))
+              && d.rows is list && d.rows.size() <= 40
+              && d.updatedAt == request.time && d.updatedBy == request.auth.uid
+              && exists(profilePath(d.driverUid))
+              && get(profilePath(d.driverUid)).data.companyId == companyId;
+        }
+        allow read:           if isAdmin(companyId) || (isDriverOrAdmin(companyId) && resource.data.driverUid == request.auth.uid);
+        allow create, update: if isAdmin(companyId) && validDuty(request.resource.data);
         allow delete:         if isAdmin(companyId);
       }
 
