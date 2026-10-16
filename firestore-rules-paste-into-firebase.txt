@@ -19,6 +19,7 @@ rules_version = '2';
 //   companies/{companyId}/messages/{id} v21: office <-> driver messages { thread: 'all' (broadcast) | <driverUid>, fromUid,
 //                                        fromName, fromRole, text, at, readBy: { uid: time } }. A driver reads broadcasts + their
 //                                        own thread, writes only replies in their own thread and their own read receipts.
+//   companies/{companyId}/dutyTemplates/{id}  v22: the duty list (admins only) { dutyNo, vehicleId?, vehicleReg?, note?, rows, updatedAt, updatedBy }
 //   companies/{companyId}/duties/{driverUid}_{YYYY-MM-DD}
 //                                        v21: a driver's duty worksheet for one day (duty no., vehicle, time + description rows).
 //                                        Admins write; a driver reads only their own.
@@ -237,7 +238,7 @@ service cloud.firestore {
       // id "<driverUid>_<YYYY-MM-DD>"; the driver must be a user of this company. Admins: full control. Drivers: read their own.
       match /duties/{dutyId} {
         function validDuty(d) {
-          return d.keys().hasOnly(['date','driverUid','driverName','dutyNo','vehicleId','vehicleReg','note','rows','updatedAt','updatedBy'])
+          return d.keys().hasOnly(['date','driverUid','driverName','dutyNo','vehicleId','vehicleReg','note','rows','templateId','edited','updatedAt','updatedBy'])
               && d.keys().hasAll(['date','driverUid','driverName','dutyNo','rows','updatedAt','updatedBy'])
               && d.date is string && d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
               && d.driverUid is string && dutyId == d.driverUid + '_' + d.date
@@ -247,6 +248,8 @@ service cloud.firestore {
               && (!('vehicleReg' in d) || (d.vehicleReg is string && d.vehicleReg.size() <= 20))
               && (!('note' in d) || (d.note is string && d.note.size() <= 500))
               && d.rows is list && d.rows.size() <= 40
+              && (!('templateId' in d) || (d.templateId is string && d.templateId.size() <= 128))
+              && (!('edited' in d) || d.edited is bool)
               && d.updatedAt == request.time && d.updatedBy == request.auth.uid
               && exists(profilePath(d.driverUid))
               && get(profilePath(d.driverUid)).data.companyId == companyId;
@@ -254,6 +257,23 @@ service cloud.firestore {
         allow read:           if isAdmin(companyId) || (isDriverOrAdmin(companyId) && resource.data.driverUid == request.auth.uid);
         allow create, update: if isAdmin(companyId) && validDuty(request.resource.data);
         allow delete:         if isAdmin(companyId);
+      }
+
+      // ------------------------------------------------------- duty list / templates (v22)
+      // the office's regular duties; a day's duty is a copy (duties/...templateId). Admins only - drivers never read these.
+      match /dutyTemplates/{tplId} {
+        function validTpl(d) {
+          return d.keys().hasOnly(['dutyNo','vehicleId','vehicleReg','note','rows','updatedAt','updatedBy'])
+              && d.keys().hasAll(['dutyNo','rows','updatedAt','updatedBy'])
+              && d.dutyNo is string && d.dutyNo.size() >= 1 && d.dutyNo.size() <= 20
+              && (!('vehicleId' in d) || (d.vehicleId is string && d.vehicleId.size() <= 128))
+              && (!('vehicleReg' in d) || (d.vehicleReg is string && d.vehicleReg.size() <= 20))
+              && (!('note' in d) || (d.note is string && d.note.size() <= 500))
+              && d.rows is list && d.rows.size() <= 40
+              && d.updatedAt == request.time && d.updatedBy == request.auth.uid;
+        }
+        allow read, delete:   if isAdmin(companyId);
+        allow create, update: if isAdmin(companyId) && validTpl(request.resource.data);
       }
 
       // ----------------------------------------------------------------- runs
