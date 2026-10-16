@@ -11,9 +11,9 @@ import {
 import { isConfigured, isEmulator, auth, db } from "./firebase-init.js?v=16";
 import { $, setView, toast, friendlyError, readServicePick, wireServicePick } from "./ui.js?v=16";
 import { decodePolyline, densify } from "./geo.js?v=16";
-import { initAdmin, showAdmin, onRoutesChanged, onCompanyChanged, onVehiclesChanged } from "./admin.js?v=21";
+import { initAdmin, showAdmin, onRoutesChanged, onCompanyChanged, onVehiclesChanged } from "./admin.js?v=22";
 import { initDriverMessages, stopDriverMessages, stopAdminMessages } from "./messages.js?v=21";
-import { initDriverDuties, stopDriverDuties, stopAdminDuties, todayDuty } from "./duties.js?v=21";
+import { initDriverDuties, stopDriverDuties, stopAdminDuties, todayDuty } from "./duties.js?v=22";
 import { initVehicleCheck, findVehicleCheck, endOfDutyDone, openPredrive, openEndOfDuty, isSheetOpen, showAlreadyChecked }
   from "./vehiclecheck.js?v=20";
 import { showMaintenance, stopDefectLists } from "./defectlist.js?v=18";
@@ -394,7 +394,7 @@ export async function openDriver(opts) {
 }
 
 /* ---------- v21: "Start this run" on today's duty worksheet -> the normal day plan / route flow ---------- */
-async function startDutyRun(routeId, duty) {
+async function startDutyRun(routeId, duty, sess) {     // v22: + the session (AM / PM) of that row
   const RT = window.RoundTracker;
   if (RT.runInProgress && RT.runInProgress()) { toast("Finish the run that is in progress first.", true); return; }
   if (!session.rawRoutes || !session.rawRoutes[routeId]) { toast("That route is no longer in the route list – ask the office.", true); return; }
@@ -402,7 +402,7 @@ async function startDutyRun(routeId, duty) {
     // no jobs picked today yet: the welcome screen first (vehicle from the duty pre-selected), then that route
     await openDriver({ vehicleId: duty && duty.vehicleId });   // (today's plan from another phone is restored instead)
   } else if (!document.body.classList.contains("view-driver")) showDriverView();
-  if (!RT.openRoute || !RT.openRoute(routeId)) toast("Could not open that route right now (Sat-Nav or a run is under way).", true);
+  if (!RT.openRoute || !RT.openRoute(routeId, sess)) toast("Could not open that route right now (Sat-Nav or a run is under way).", true);
 }
 
 /* ---------- v18: vehicle sheets (white pre-drive check / pink end-of-duty defect report) ---------- */

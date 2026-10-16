@@ -1,7 +1,10 @@
 /* v21: duty calendar - pure logic (no Firebase / DOM; unit-tested in tests/dutycore.test.mjs).
    A duty = Keith's paper "Driver Daily Worksheet": one per driver per day,
      companies/{cid}/duties/{driverUid}_{YYYY-MM-DD}
-     { date, driverUid, driverName, dutyNo, vehicleId?, vehicleReg?, note?, rows: [{ time: 'HHMM'|'' , text, routeId? }], updatedAt, updatedBy } */
+     { date, driverUid, driverName, dutyNo, vehicleId?, vehicleReg?, note?, rows: [{ time: 'HHMM'|'' , text, routeId?, session?: 'AM'|'PM' }], templateId?, edited?, updatedAt, updatedBy }
+   v22: duty templates ("Duty list") companies/{cid}/dutyTemplates/{id} { dutyNo, vehicleId?, vehicleReg?, note?, rows, updatedAt, updatedBy };
+   a day's duty made from one is a COPY carrying templateId (+ edited: true once changed for that day). */
+import { routeSessions, destLabel, routeService } from "./services.js?v=16";
 export const DUTY_ROWS_MAX = 40, ROW_TEXT_MAX = 200, DUTY_NO_MAX = 20, NOTE_MAX = 500;
 export const dutyId = (uid, date) => uid + "_" + date;
 const ISO = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -45,7 +48,7 @@ export function cleanRows(rows) {
     const time = normTime(r.time), text = String(r.text || "").trim().slice(0, ROW_TEXT_MAX), routeId = String(r.routeId || "").slice(0, 128);
     if (!text && !routeId && !time) return;
     const row = { time: time === null ? "" : time, text };
-    if (routeId) row.routeId = routeId;
+    if (routeId) { row.routeId = routeId; if (r.session === "AM" || r.session === "PM") row.session = r.session; }
     out.push(row);
   });
   return out.slice(0, DUTY_ROWS_MAX);
@@ -71,11 +74,12 @@ export function buildDuty(f) {
   if (f.vehicleId) { d.vehicleId = String(f.vehicleId).slice(0, 128); d.vehicleReg = String(f.vehicleReg || "").slice(0, 20); }
   const note = String(f.note || "").trim().slice(0, NOTE_MAX);
   if (note) d.note = note;
+  if (f.templateId) { d.templateId = String(f.templateId).slice(0, 128); if (f.edited) d.edited = true; }
   return d;
 }
 /* the same duty for another driver / date */
 export function copyDuty(src, to) {
-  return buildDuty({ ...src, date: to.date || src.date, driverUid: to.driverUid || src.driverUid, driverName: to.driverName || src.driverName });
+  return buildDuty({ ...src, edited: src.edited, date: to.date || src.date, driverUid: to.driverUid || src.driverUid, driverName: to.driverName || src.driverName });
 }
 /* "copy last week": every duty of the week before weekStart(date) -> same weekday this week; existing targets are skipped */
 export function lastWeekCopies(duties, anyDateThisWeek) {
@@ -97,9 +101,9 @@ export function worksheetHtml(d, o) {
   o = o || {};
   const routeName = (id) => (o.routes && o.routes[id] && o.routes[id].name) || "";
   const rows = (d.rows || []).map((r, i) => {
-    const rn = r.routeId ? routeName(r.routeId) : "";
+    const rn = r.routeId ? routeLabel(o.routes, r.routeId, r.session) : "";
     return '<tr class="ws-row' + (r.routeId ? " linked" : "") + '"><td class="ws-time">' + esc(timeLabel(r.time)) + '</td><td class="ws-desc">' + esc(r.text || rn) +
-      (r.routeId ? '<div class="ws-route">🚌 ' + esc(rn || "Route") + (o.startButtons && rn ? ' <button type="button" class="btn small primary ws-start" data-route="' + esc(r.routeId) + '">▶ Start this run</button>' : "") + "</div>" : "") +
+      (r.routeId ? '<div class="ws-route">🚌 ' + esc(rn || "Route") + (o.startButtons && rn ? ' <button type="button" class="btn small primary ws-start" data-route="' + esc(r.routeId) + '" data-session="' + esc(r.session || "") + '">▶ Start this run</button>' : "") + "</div>" : "") +
       "</td></tr>";
   }).join("");
   const pad = Math.max(0, (o.minRows || 0) - (d.rows || []).length);
@@ -111,4 +115,66 @@ export function worksheetHtml(d, o) {
     '<table class="ws-rows"><thead><tr><th class="ws-time">TIME</th><th>DESCRIPTION</th></tr></thead><tbody>' + rows +
     '<tr class="ws-pad"><td></td><td></td></tr>'.repeat(pad) + "</tbody></table>" +
     (d.note ? '<div class="ws-note">' + esc(d.note) + "</div>" : "") + "</div>";
+}
+
+/* ================= v22: routes once each + AM/PM =================
+   Why the picker showed every route twice: each session of a route is its own route document ("741 & 742 (AM)" and
+   "741 & 742 (PM)"), and the v21 picker listed every document. Group them the way the welcome picks already do
+   (service + name without the session marker): one entry per route, with the sessions that exist -> the document to open. */
+export function routeGroups(routes) {
+  const g = new Map();
+  Object.entries(routes || {}).forEach(([id, r]) => {
+    if (!r) return;
+    const x = routeSessions(r), sess = [x.am && "AM", x.pm && "PM"].filter(Boolean);
+    let key = routeService(r) + "|" + destLabel(r).toLowerCase(), o = g.get(key);
+    const want = sess.length ? sess : [""];
+    if (o && want.some((s) => o.sessions[s])) { key += "#" + id; o = null; }       // a clash: keep both, never lose one
+    if (!o) { o = { key, label: destLabel(r), sessions: {} }; g.set(key, o); }
+    want.forEach((s) => { o.sessions[s] = id; });
+  });
+  return [...g.values()].map((o) => ({ ...o, list: ["AM", "PM", ""].filter((s) => o.sessions[s]) }))
+    .sort((a, b) => a.label.localeCompare(b.label, "en-GB", { numeric: true }) || a.key.localeCompare(b.key));
+}
+/* which group / session a stored row points at (older rows: no session -> the session of that document, AM first) */
+export function findGroup(groups, routeId, session) {
+  const g = (groups || []).find((x) => Object.values(x.sessions).includes(routeId));
+  if (!g) return null;
+  const s = session && g.sessions[session] === routeId ? session : g.list.find((k) => g.sessions[k] === routeId);
+  return { group: g, session: s || "" };
+}
+export function routeLabel(routes, id, session) {
+  const r = routes && routes[id];
+  if (!r) return "";
+  return session ? destLabel(r) + " " + session : (r.name || "");
+}
+/* ================= v22: duty templates ================= */
+export function checkTemplate(f) {
+  const c = checkDuty({ ...f, date: "2000-01-01", driverUid: "x" });
+  return { ok: c.ok, errors: c.errors.map((e) => (e === "Enter the duty number." ? "Enter the duty number / name." : e)), rows: c.rows };
+}
+export function buildTemplate(f) {
+  const d = buildDuty({ ...f, date: "", driverUid: "", templateId: "" });
+  delete d.date; delete d.driverUid; delete d.driverName;
+  return d;
+}
+/* the day's copy of a template for a driver */
+export function dutyFromTemplate(t, to) {
+  return buildDuty({ ...t, date: to.date, driverUid: to.driverUid, driverName: to.driverName, templateId: t.id, edited: false });
+}
+const sig = (d) => JSON.stringify([String(d.dutyNo || ""), d.vehicleId || "", d.note || "", cleanRows(d.rows)]);
+/* does this form differ from its template? (sets the 'edited for this day' marker) */
+export const differsFromTemplate = (d, t) => !!t && sig(d) !== sig(t);
+/* dates from..to (inclusive) on the chosen weekdays (0 = Monday; empty = every day); at most 92 */
+export function assignDates(from, to, weekdays) {
+  if (!isIsoDate(from)) return [];
+  if (!isIsoDate(to) || to < from) to = from;
+  const w = new Set(weekdays || []), out = [];
+  for (let d = from; d <= to && out.length < 92; d = addDays(d, 1)) if (!w.size || w.has(weekday(d))) out.push(d);
+  return out;
+}
+/* day board: one row per template, with the duty made from it on that date (if any) */
+export function dayBoard(templates, duties, date) {
+  const onDay = (duties || []).filter((d) => d.date === date && d.templateId);
+  return (templates || []).slice().sort((a, b) => String(a.dutyNo).localeCompare(String(b.dutyNo), "en-GB", { numeric: true }))
+    .map((t) => ({ t, duties: onDay.filter((d) => d.templateId === t.id) }));
 }

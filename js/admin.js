@@ -13,7 +13,7 @@ import { parseGPX, fitTrack, decodePolyline, encodePolyline } from "./geo.js?v=1
 import { initRuns } from "./runs.js?v=16";
 import { initAdminDefects } from "./defectlist.js?v=18";
 import { initAdminMessages, setMessageTeam, adminMessagesShown } from "./messages.js?v=21";
-import { initAdminDuties, setDutyTeam, refreshDutyLists } from "./duties.js?v=21";
+import { initAdminDuties, setDutyTeam, refreshDutyLists } from "./duties.js?v=22";
 import { buildBackup, parseBackup, planRestore, backupFileName, routeFileName, MAX_RESTORE_ROUTES, MAX_RESTORE_BYTES } from "./backup.js?v=16";
 import { normOp, opEmpty, opEqual, validateOperator, routeIsCustom, planApply, OP_LIMITS } from "./operator.js?v=16";
 

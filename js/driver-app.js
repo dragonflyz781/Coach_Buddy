@@ -2409,8 +2409,13 @@
   }
   window.RoundTracker = {
     // v21: "Start this run" on a duty worksheet - open that route (not while a run / Sat-Nav is under way)
-    openRoute: function(id){
+    openRoute: function(id, sess){
       if(!routes[id] || tracking || document.body.classList.contains('satnav-mode')) return false;
+      // v22: the session of the duty row (AM / PM) -> that tab of the route list (matters for a route that runs both)
+      if(sess==='AM' || sess==='PM'){
+        var key = svcOf(routes[id]) + '-' + sess.toLowerCase();
+        if(RT_TABS.some(function(t){ return t.key===key; })){ drawerTab = key; try{ localStorage.setItem('rt_drawer_tab', key); }catch(e){} }
+      }
       setActiveRoute(id); return true;
     },
     // fresh: { routeId: routeObject } for the signed-in user's company (real-time)
