@@ -674,3 +674,36 @@ body:not(.view-driver) .msg-fab{ display:none !important; }
 .mc-sheet .ws-paper{ border-radius:6px; }
 form.msg-compose > .btn.primary{ width:auto; margin-top:0; flex:0 0 auto; min-width:84px; }
 .msg-compose textarea{ min-width:0; width:auto; }
+
+/* ---------- v22: duty list (templates), day board, route + AM/PM picker ---------- */
+.de-routecell{ display:flex; gap:4px; min-width:0; }
+.de-routecell .de-route{ flex:1 1 auto; }
+.duty-row .de-sess{ flex:0 0 64px; width:64px; padding-left:6px; padding-right:2px; }
+.duty-row .de-sess:disabled{ opacity:.75; }
+.duty-tpl-bar{ display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; padding:8px 10px; margin:0 0 10px; border-radius:10px; background:color-mix(in srgb, var(--route) 10%, var(--surface)); font-size:14px; }
+.duty-edited{ display:inline-block; padding:2px 8px; border-radius:999px; background:#fff3c4; color:#5c4300; font-size:12.5px; font-weight:700; }
+.duty-ed-mark{ font-style:normal; font-size:11px; color:#8a6500; }
+.duty-board{ border-collapse:collapse; width:100%; }
+.duty-board th, .duty-board td{ border-bottom:1px solid var(--line); padding:6px; text-align:left; font-size:14px; }
+.duty-board tbody th{ font-size:16px; white-space:nowrap; }
+.duty-board select{ font:inherit; font-size:15px; padding:7px 8px; border-radius:9px; border:1.5px solid var(--line); background:var(--surface); color:var(--text); max-width:100%; }
+.duty-range{ margin-top:12px; }
+.duty-range summary{ cursor:pointer; font-weight:700; }
+.duty-range-body{ display:flex; flex-wrap:wrap; gap:8px 12px; align-items:flex-end; margin-top:8px; }
+.duty-range-body label{ display:flex; flex-direction:column; font-size:12px; font-weight:700; color:var(--muted); gap:3px; }
+.duty-range-body select, .duty-range-body input[type=date]{ font:inherit; font-size:15px; padding:7px 8px; border-radius:9px; border:1.5px solid var(--line); background:var(--surface); color:var(--text); }
+.duty-wd{ display:flex; flex-wrap:wrap; gap:4px 10px; width:100%; }
+.duty-range-body .duty-wd label{ flex-direction:row; align-items:center; font-size:14px; color:var(--text); }
+.duty-tlist{ display:flex; flex-direction:column; gap:8px; margin-top:8px; }
+.duty-tpl{ display:flex; gap:10px; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid var(--line); border-radius:12px; }
+.duty-tpl-main{ min-width:0; }
+.duty-tpl-no{ font-size:17px; }
+.duty-tpl-veh{ font-size:13px; color:var(--muted); margin-left:6px; }
+.duty-tpl-sum{ font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60vw; }
+.duty-tpl-btns{ display:flex; gap:6px; flex:0 0 auto; }
+#tplEditor{ margin-top:12px; padding-top:12px; border-top:1px dashed var(--line); }
+@media (max-width:560px){
+  .duty-rows-head, .duty-row{ grid-template-columns:62px 1fr 30px; }
+  .duty-rows-head span:nth-child(3){ display:none; }
+  .duty-row .de-routecell{ grid-column:1 / -1; order:5; }
+}
