@@ -1,4 +1,4 @@
-/* v21: two-way messages between the office and the drivers (in-app only, realtime listeners; no push when the app is closed).
+/* v21: two-way messages between the office and the drivers (realtime listeners in the app; v25: + phone push via functions/).
      companies/{cid}/messages/{id} { thread: 'all' | <driverUid>, fromUid, fromName, fromRole, text, at, readBy: { uid: time } }
    admin  - "Messages" tab: All drivers (broadcasts) + one thread per driver, unread count, who has read each message.
    driver - ✉ button in the top bar (+ a floating 💬 button in Sat-Nav), unread badge, pop-up for a new message (Reply / Got it),
@@ -7,6 +7,7 @@ import { doc, collection, addDoc, updateDoc, onSnapshot, query, where, orderBy, 
   from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 import { $, esc, toast, friendlyError } from "./ui.js?v=16";
 import { MSG_MAX, cleanText, normMsg, byTime, driverUnread, adminUnread, threadList, readLabel, readers, londonTime, isRead } from "./msgcore.js?v=21";
+import { pushCtaHtml } from "./push.js?v=25";     // v25: phone notifications (Cloud Functions send them, see functions/)
 
 const RULES_MSG = "Messages can’t be loaded yet – publish the updated Firestore rules (firestore-rules-paste-into-firebase.txt) in the Firebase console.";
 const col = (c) => collection(c.db, "companies", c.companyId, "messages");
@@ -51,13 +52,15 @@ export function setMessageTeam(users) {
   renderAdmin();
 }
 export function adminMessagesShown() { renderAdmin(); }
+/* v25: a tapped push for a driver's reply opens that driver's thread */
+export function adminOpenThread(id) { if (id) A.sel = String(id); renderAdmin(); }
 const adminVisible = () => { const s = $("admMessages"); return !!s && s.style.display !== "none" && document.body.classList.contains("view-admin") && document.visibilityState === "visible"; };
 document.addEventListener("visibilitychange", () => { if (A.c) renderAdmin(); });
 
 function wireAdmin() {
   A.wired = true;
   const m = $("admMessagesBody");
-  m.innerHTML = '<div class="card wide"><h2>Messages</h2><p class="muted">Send a message to <b>all drivers</b> or to <b>one driver</b>. Drivers see it in the app straight away (with a pop-up) and can reply. In-app only: a driver whose app is closed sees it the next time they open it.</p></div>' +
+  m.innerHTML = '<div class="card wide"><h2>Messages</h2><p class="muted">Send a message to <b>all drivers</b> or to <b>one driver</b>. Drivers see it in the app straight away (with a pop-up) and can reply. Drivers who turned on <b>phone notifications</b> also get a push when the app is closed; turn them on here to be told about drivers\' replies.</p>' + pushCtaHtml("adm-push") + '</div>' +
     '<div class="msg-admin"><div class="msg-threads" id="msgThreads" role="list"></div>' +
     '<div class="card msg-conv"><div class="msg-conv-head"><h2 id="msgConvTitle">All drivers</h2><span class="muted" id="msgConvSub"></span></div>' +
     '<div class="msg-list" id="msgAdminList" aria-live="polite"></div>' +
@@ -164,7 +167,7 @@ export function openDriverMessages() {
   closePop(); D.open = true;
   const ov = $("mcOverlay"); ov.dataset.owner = "msgs";
   $("mcSheet").innerHTML = '<div class="mc-head"><h2 id="mcTitle">💬 Messages</h2><button class="icon-btn" id="msgClose" type="button" aria-label="Close">✕</button></div>' +
-    '<div class="msg-list drv" id="msgDrvList" aria-live="polite"></div>' +
+    pushCtaHtml("msg-push") + '<div class="msg-list drv" id="msgDrvList" aria-live="polite"></div>' +
     '<form class="msg-compose" id="msgDrvForm"><textarea id="msgDrvText" rows="2" maxlength="' + MSG_MAX + '" placeholder="Reply to the office…" aria-label="Reply"></textarea>' +
     '<button class="btn primary" id="msgDrvSend" type="submit">Send</button></form><div class="form-msg" id="msgDrvMsg"></div>';
   ov.setAttribute("aria-labelledby", "mcTitle");

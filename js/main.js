@@ -11,9 +11,10 @@ import {
 import { isConfigured, isEmulator, auth, db } from "./firebase-init.js?v=16";
 import { $, setView, toast, friendlyError, readServicePick, wireServicePick } from "./ui.js?v=16";
 import { decodePolyline, densify } from "./geo.js?v=16";
-import { initAdmin, showAdmin, onRoutesChanged, onCompanyChanged, onVehiclesChanged } from "./admin.js?v=24";
-import { initDriverMessages, stopDriverMessages, stopAdminMessages } from "./messages.js?v=21";
-import { initDriverDuties, stopDriverDuties, stopAdminDuties, todayDuty, openDuties, driverDuties, driverDutyChangedIds, dutiesReady } from "./duties.js?v=24";
+import { initAdmin, showAdmin, onRoutesChanged, onCompanyChanged, onVehiclesChanged } from "./admin.js?v=25";
+import { initDriverMessages, stopDriverMessages, stopAdminMessages, openDriverMessages, adminOpenThread } from "./messages.js?v=25";
+import { initPush, stopPush, pushSignOut, onPushOpen } from "./push.js?v=25";     // v25: phone notifications
+import { initDriverDuties, stopDriverDuties, stopAdminDuties, todayDuty, openDuties, driverDuties, driverDutyChangedIds, dutiesReady } from "./duties.js?v=25";
 import { dutyRank } from "./dutycore.js?v=24";
 import { initVehicleCheck, findVehicleCheck, endOfDutyDone, openPredrive, openEndOfDuty, isSheetOpen, showAlreadyChecked }
   from "./vehiclecheck.js?v=23";
@@ -29,6 +30,7 @@ const session = { user: null, profile: null, company: null, companyId: null, uns
   routesReady: null, routesLoaded: null, pick: null, vehicles: {}, unsubVehicles: null, vehicleId: null,
   plan: null, planDay: null, dayOver: false, planWrittenDay: null };
 let registering = false;
+let signingOut = false;          // v25: set while signing out (the page reloads at the end)
 
 /* ---------- convert a Firestore route doc into the shape the driver view expects ---------- */
 export function docToRoute(id, d, companyOp) {
@@ -62,7 +64,7 @@ if (!isConfigured) {
   wireAuthForms();
   onAuthStateChanged(auth, (user) => {
     if (registering) return;               // registration finishes the session itself
-    if (!user) { teardown(); setView("auth"); return; }
+    if (!user) { if (signingOut) return; teardown(); setView("auth"); return; }   // v25: no half-ready sign-in form before the reload
     startSession(user);
   });
 }
@@ -87,6 +89,7 @@ async function startSession(user) {
       showMaintenance({ db, user, profile, companyId: session.companyId, company: session.company, signOutAndReset });
       return;
     }
+    initPush({ db, user, profile, companyId: session.companyId });            // v25: refreshes this phone's push token if turned on
     $("acctLine").textContent = (profile.name || user.email) + " · " + session.company.name +
       " · " + (profile.role === "admin" ? "Administrator" : "Driver");
     $("acctAdmin").style.display = profile.role === "admin" ? "" : "none";
@@ -106,6 +109,7 @@ async function startSession(user) {
     } else {
       openDriver();
     }
+    onPushOpen(openFromPush);                                                    // v25: a tapped notification
   } catch (e) {
     console.error(e);
     setView("auth");
@@ -243,6 +247,7 @@ function runIncidents(list) {
 function teardown() {
   stopDefectLists();
   stopDriverMessages(); stopAdminMessages(); stopDriverDuties(); stopAdminDuties();     // v21
+  stopPush();                                                                             // v25
   if (session.unsubRoutes) { session.unsubRoutes(); session.unsubRoutes = null; }
   if (session.unsubCompany) { session.unsubCompany(); session.unsubCompany = null; }
   if (session.unsubVehicles) { session.unsubVehicles(); session.unsubVehicles = null; }
@@ -472,7 +477,23 @@ async function promptEndOfDuty(auto) {
   return openEndOfDuty({ vehicle: currentVehicle(), day, vehicles: fleetList() });
 }
 
+/* v25: a notification was tapped - open that duty's worksheet, or the messages (admins: the driver's thread) */
+async function openFromPush(p) {
+  if (!session.profile || !p) return;
+  if (p.open === "duty") {
+    await dutiesReady(4000);
+    openDuties(p.day || undefined);
+  } else if (p.open === "msg") {
+    if (session.profile.role === "admin" && p.thread && p.thread !== "all" && p.thread !== session.user.uid) {
+      showAdmin(); const t = $("admTabMessages"); if (t) t.click(); adminOpenThread(p.thread);
+    } else if (session.profile.role === "admin") { showAdmin(); const t = $("admTabMessages"); if (t) t.click(); }
+    else openDriverMessages();
+  }
+}
+
 async function signOutAndReset() {
+  signingOut = true;
+  await pushSignOut();          // v25: this phone stops getting this user's pushes
   teardown();
   try { await signOut(auth); } catch (e) { /* ignore */ }
   // Clear the on-device Firestore cache so nothing from this company stays behind on a shared phone.

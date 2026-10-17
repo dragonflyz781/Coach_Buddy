@@ -11,6 +11,7 @@ import { dutyDay } from "./services.js?v=16";
 import { dutyId, addDays, weekStart, dayName, ukDate, monthGrid, monthTitle, shiftMonth, checkDuty, buildDuty, copyDuty, lastWeekCopies,
   changedDuties, dutyStamp, worksheetHtml, isIsoDate, knownMap, dutyAlerts, alertTitle, weekStrip,
   routeGroups, findGroup, routeLabel, checkTemplate, buildTemplate, dutyFromTemplate, differsFromTemplate, assignDates, dayBoard } from "./dutycore.js?v=24";
+import { pushCtaHtml, pushKeySet, pushState, enablePush } from "./push.js?v=25";     // v25: real phone notifications
 
 const RULES_MSG = "Duties can’t be loaded yet – publish the updated Firestore rules (firestore-rules-paste-into-firebase.txt) in the Firebase console.";
 const col = (c) => collection(c.db, "companies", c.companyId, "duties");
@@ -402,7 +403,7 @@ function renderCalendar() {
   D.list.forEach((d) => { byDate[d.date] = d; });
   const td = byDate[t], next = D.list.find((d) => d.date > t);
   const [y, m] = D.ym;
-  b.innerHTML = (D.err ? '<div class="form-msg">' + esc(D.err) + "</div>" : "") +
+  b.innerHTML = (D.err ? '<div class="form-msg">' + esc(D.err) + "</div>" : "") + pushCtaHtml("dt-push") +
     '<div class="dt-today' + (td ? "" : " none") + '">' + (td
       ? '<button type="button" class="dt-today-btn" data-day="' + td.date + '"><span class="dt-k">TODAY · ' + esc(dayName(t) + " " + ukDate(t)) + '</span><span class="dt-v">Duty ' + esc(td.dutyNo) + (td.vehicleReg ? " · " + esc(td.vehicleReg) : "") +
         (changed.has(td.id) ? ' <span class="dt-new">NEW</span>' : "") + '</span><span class="dt-first">' + esc(((td.rows || [])[0] || {}).time ? td.rows[0].time + " " + td.rows[0].text : (td.rows || [])[0] ? td.rows[0].text : "") + "</span><span class=\"dt-open\">Open worksheet ›</span></button>"
@@ -628,7 +629,10 @@ function showAlert(ring) {
     esc(dayName(a.date) + " " + ukDate(a.date)) + "</b> · " + esc(a.kind === "new" ? "new duty" : a.kind === "removed" ? "removed" : "changed") +
     (a.kind !== "removed" ? ' <button type="button" class="btn small dpop-view" data-view="' + esc(a.date) + '">View</button>' : "") + "</div>" +
     '<ul class="dpop-lines">' + a.lines.map((l) => "<li><mark>" + esc(l) + "</mark></li>").join("") + "</ul></div>").join("");
-  const canAsk = typeof Notification !== "undefined" && Notification.permission === "default" && !localStorage.getItem("rt_notif_asked");
+  // v25: with the Web Push key set this offers REAL phone notifications (also when the app is closed); otherwise the v24 tab-only alerts
+  const asked = !!localStorage.getItem("rt_notif_asked"), push = pushKeySet();
+  const canAsk = !asked && (push ? pushState() !== "on" && pushState() !== "blocked" : typeof Notification !== "undefined" && Notification.permission === "default");
+  $("dutyPopNotif").textContent = push ? "🔔 Turn on phone notifications (even when the app is closed)" : "🔔 Also alert me when the app is in the background";
   $("dutyPopNotif").style.display = canAsk ? "" : "none";
   $("dutyPopView").style.display = al.length === 1 && al[0].kind !== "removed" ? "" : "none";
   p.style.display = "flex";
@@ -649,6 +653,7 @@ function wireAlert() {
   $("dutyPopNotif").addEventListener("click", async () => {
     try { localStorage.setItem("rt_notif_asked", "1"); } catch (e) { /* ignore */ }
     $("dutyPopNotif").style.display = "none";
+    if (pushKeySet()) { enablePush(); return; }
     try { const r = await Notification.requestPermission(); toast(r === "granted" ? "Background alerts on ✔ (while the app is open in a tab)" : "No background alerts – you’ll still see them in the app."); } catch (e) { /* ignore */ }
   });
 }
