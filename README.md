@@ -159,6 +159,15 @@ A confirm dialog comes before any write; tracks go through the normal encoding/s
 3. After the pick: a short *Ready* with a *Continue – Schools AM* button, then the driver view opens with the route drawer filtered to that type and session (empty tabs hidden) and a route from it on the map. *Today: Schools AM · Change* in the drawer goes back to the welcome screen.
 4. A route's type = its *Service type* (route editor) if set, else its category. The pick is stored as e.g. `schools|AM` in sessionStorage and localStorage (`rt_svc_<companyId>`); v8 values are ignored.
 
+### 4g. New in v25 – phone push notifications (Firebase Cloud Messaging, needs Blaze)
+
+* **What gets a push:** a driver's duty is created, changed or removed by the office ("Duty changed: Mon 19/10/2026" + a short summary), an office message to that driver or to all drivers, and a driver's reply (to the admins). Tapping the notification opens the app at that duty's worksheet or at the messages.
+* **Turning it on:** each person taps **🔔 Turn on phone notifications** (routes drawer, My duties, Messages; admins: the Messages tab). The phone's token is stored at `companies/{cid}/pushTokens/{uid}_{hash}`; the rules let each user write / read / delete only their own (admins may delete any of their company's). Sign out and "Turn off" remove it.
+* **iPhone / iPad:** iOS 16.4 or later, and Coach Buddy must be opened from the Home Screen (Safari → Share → Add to Home Screen) – push does not work in a Safari tab.
+* **Files:** `firebase-messaging-sw.js` (service worker, next to index.html so its scope is `/Coach_Buddy/`), `manifest.webmanifest` + `icons/`, `js/push.js`, `js/push-config.js` (the public Web Push / VAPID key), `functions/` (2nd gen, Node 22, europe-west2: `dutyPush`, `messagePush`).
+* **Deploy the backend (from this folder, after `firebase login`):** `firebase deploy --only firestore,functions --project workplace-tracker-3712d`. The site itself stays on GitHub Pages – `firebase.json` has no hosting section (the local test setup uses `firebase.emulators.json`).
+* **Tests:** `npm run test:functions` runs both functions in the emulator (nothing is sent to FCM there; each push is logged to `companies/{cid}/pushLog`).
+
 ## 5. Testing – what was actually run
 
 Everything below was run on the build box against the **Firebase emulators** (Auth + Firestore + Hosting), headless Chrome 

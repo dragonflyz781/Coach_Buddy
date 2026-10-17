@@ -6,12 +6,20 @@
 <meta name="color-scheme" content="light dark">   <!-- v17: the app has its own dark theme - stops Chrome auto-darkening it (black buttons) -->
 <title>Round Tracker</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E🚌%3C/text%3E%3C/svg%3E">
+<!-- v25: installable web app (iPhone push needs it on the Home Screen, iOS 16.4+) -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#e0631a">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Coach Buddy">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/leaflet.css">
 <link rel="stylesheet" href="css/app.css?v=17">      <!-- the original driver app styles, unchanged -->
-<link rel="stylesheet" href="css/admin.css?v=24">    <!-- sign-in, admin and layout additions -->
+<link rel="stylesheet" href="css/admin.css?v=25">    <!-- sign-in, admin and layout additions -->
 </head>
 <body class="view-boot">
 
@@ -474,6 +482,7 @@
         <button class="chip-btn badge-btn" id="acctDuties" type="button" style="display:none">📅 My duties<span class="hdr-badge" id="acctDutiesBadge" hidden></span></button>
         <button class="chip-btn badge-btn" id="acctMsgs" type="button" style="display:none">💬 Messages<span class="hdr-badge" id="acctMsgsBadge" hidden></span></button>
       </div>
+      <div class="push-cta drawer-push" data-push-cta id="acctPush" style="display:none"></div>   <!-- v25: phone notifications -->
     </div>
     <div class="svc-bar" id="svcBar" style="display:none"><span class="muted">Today:</span><span class="svc-today" id="svcToday"></span><button class="chip-btn" id="svcChange" type="button">Change today’s jobs</button></div>
     <div class="rt-tabs" id="rtTabs"></div>
@@ -485,6 +494,6 @@
 <script src="vendor/leaflet.js"></script>
 <script src="vendor/leaflet-rotate.js"></script>
 <script src="js/driver-app.js?v=22"></script>
-<script type="module" src="js/main.js?v=24"></script>
+<script type="module" src="js/main.js?v=25"></script>
 </body>
 </html>
