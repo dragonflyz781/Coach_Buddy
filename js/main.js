@@ -11,12 +11,12 @@ import {
 import { isConfigured, isEmulator, auth, db } from "./firebase-init.js?v=16";
 import { $, setView, toast, friendlyError, readServicePick, wireServicePick } from "./ui.js?v=16";
 import { decodePolyline, densify } from "./geo.js?v=16";
-import { initAdmin, showAdmin, onRoutesChanged, onCompanyChanged, onVehiclesChanged } from "./admin.js?v=22";
+import { initAdmin, showAdmin, onRoutesChanged, onCompanyChanged, onVehiclesChanged } from "./admin.js?v=23";
 import { initDriverMessages, stopDriverMessages, stopAdminMessages } from "./messages.js?v=21";
-import { initDriverDuties, stopDriverDuties, stopAdminDuties, todayDuty } from "./duties.js?v=22";
+import { initDriverDuties, stopDriverDuties, stopAdminDuties, todayDuty } from "./duties.js?v=23";
 import { initVehicleCheck, findVehicleCheck, endOfDutyDone, openPredrive, openEndOfDuty, isSheetOpen, showAlreadyChecked }
-  from "./vehiclecheck.js?v=20";
-import { showMaintenance, stopDefectLists } from "./defectlist.js?v=18";
+  from "./vehiclecheck.js?v=23";
+import { showMaintenance, stopDefectLists } from "./defectlist.js?v=23";
 import { resolveOperator } from "./operator.js?v=16";
 import { pickedServiceTypes, welcomeName, selLabel, selMatches, encodeSel, decodeSel, picksFromSel, routeRank, routeSlotLabel,
   dutyDay, prevDutyDay } from "./services.js?v=16";

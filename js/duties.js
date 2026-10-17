@@ -121,7 +121,7 @@ function openEditor(uid, date) {
     '<div class="duty-tpl-bar" id="deTplBar" style="display:none"></div>' +
     '<div class="duty-ed-top"><label>Date<input type="date" id="deDate"></label><label>Driver<select id="deDriver"></select></label>' +
     '<label>Duty no.<input id="deNo" maxlength="20" inputmode="text" placeholder="e.g. 8"></label><label>Vehicle<select id="deVeh"></select></label></div>' +
-    '<div class="duty-rows-head"><span>Time</span><span>Description</span><span>Route (optional)</span><span></span></div><div id="deRows" class="duty-rows"></div>' +
+    '<div class="duty-rows-head"><span></span><span>Time</span><span>Description</span><span>Route (optional)</span><span></span></div><div id="deRows" class="duty-rows"></div>' +
     '<div class="duty-ed-btns"><button class="btn small" type="button" id="deAdd">+ Add row</button><button class="btn small" type="button" id="deTpl">Blank worksheet layout</button></div>' +
     '<label class="duty-note">Note (optional)<textarea id="deNote" rows="2" maxlength="500"></textarea></label>' +
     '<div class="form-msg" id="deMsg" role="status"></div>' +
@@ -219,7 +219,15 @@ function refreshRouteSelects() {
   });
 }
 function wireRows(box) {
-  box.addEventListener("click", (ev) => { const b = ev.target.closest(".de-del"); if (b) b.closest(".duty-row").remove(); });
+  box.addEventListener("click", (ev) => {
+    const b = ev.target.closest(".de-del"); if (b) { b.closest(".duty-row").remove(); return; }
+    const u = ev.target.closest(".de-up, .de-down"); if (!u) return;      // v23: ▲▼ = keyboard / accessible fallback for dragging
+    const row = u.closest(".duty-row"), up = u.classList.contains("de-up"), sib = up ? row.previousElementSibling : row.nextElementSibling;
+    if (!sib) return;
+    if (up) box.insertBefore(row, sib); else box.insertBefore(sib, row);
+    (row.querySelector(up ? ".de-up" : ".de-down") || u).focus();
+  });
+  wireDrag(box);
   box.addEventListener("change", (ev) => {     // linking a route fills an empty description with its name (+ session)
     const row = ev.target.closest(".duty-row"); if (!row || !ev.target.closest(".de-route, .de-sess")) return;
     if (ev.target.classList.contains("de-route")) syncSess(row);
@@ -233,7 +241,9 @@ const readRows = (box) => [...box.querySelectorAll(".duty-row")].map((r) => ({ t
 function addRow(r, box) {
   const row = document.createElement("div");
   row.className = "duty-row";
-  row.innerHTML = '<input class="de-time" inputmode="numeric" maxlength="5" placeholder="hhmm" aria-label="Time (hhmm)" value="' + esc((r && r.time) || "") + '">' +
+  row.innerHTML = '<span class="de-move"><span class="de-handle" role="button" tabindex="-1" aria-hidden="true" title="Drag to move this row">⋮⋮</span>' +
+    '<span class="de-ud"><button class="mini de-up" type="button" aria-label="Move row up">▲</button><button class="mini de-down" type="button" aria-label="Move row down">▼</button></span></span>' +
+    '<input class="de-time" inputmode="numeric" maxlength="5" placeholder="hhmm" aria-label="Time (hhmm)" value="' + esc((r && r.time) || "") + '">' +
     '<input class="de-text" maxlength="200" placeholder="Description" aria-label="Description" value="' + esc((r && r.text) || "") + '">' +
     '<span class="de-routecell">' + routeCell(r && r.routeId, r && r.session) + "</span>" +
     '<button class="mini del de-del" type="button" aria-label="Remove row">✕</button>';
@@ -426,7 +436,7 @@ function openTplEditor(id) {
   e.style.display = "";
   e.innerHTML = '<div class="duty-ed-head"><h3 id="teTitle">' + (t ? "Edit duty " + esc(t.dutyNo) : "New duty for the duty list") + '</h3><button class="icon-btn" type="button" id="teClose" aria-label="Close">✕</button></div>' +
     '<div class="duty-ed-top"><label>Duty no. / name<input id="teNo" maxlength="20" placeholder="e.g. 8"></label><label>Default vehicle<select id="teVeh"></select></label></div>' +
-    '<div class="duty-rows-head"><span>Time</span><span>Description</span><span>Route (optional) + AM/PM</span><span></span></div><div id="teRows" class="duty-rows"></div>' +
+    '<div class="duty-rows-head"><span></span><span>Time</span><span>Description</span><span>Route (optional) + AM/PM</span><span></span></div><div id="teRows" class="duty-rows"></div>' +
     '<div class="duty-ed-btns"><button class="btn small" type="button" id="teAdd">+ Add row</button></div>' +
     '<label class="duty-note">Note (optional)<textarea id="teNote" rows="2" maxlength="500"></textarea></label><div class="form-msg" id="teMsg" role="status"></div>' +
     '<div class="duty-ed-actions"><button class="btn primary" type="button" id="teSave">Save to duty list</button><button class="btn" type="button" id="teCancel">Cancel</button></div>' +
@@ -515,4 +525,52 @@ async function assignRange() {
   const bad = res.filter((r) => r.status === "rejected");
   m.classList.toggle("ok", !bad.length);
   m.textContent = (todo.length - bad.length) + " day" + (todo.length - bad.length === 1 ? "" : "s") + " assigned" + (skipped ? ", " + skipped + " skipped (already had a duty)" : "") + (bad.length ? ", " + bad.length + " failed: " + errMsg(bad[0].reason) : " ✔");
+}
+
+/* ================================================================ v23: drag rows to reorder (mouse + touch)
+   Pointer events on the ⋮⋮ handle only (typing in the inputs never starts a drag). The row follows the finger, a
+   placeholder shows where it will drop, and the page / sheet scrolls by itself near the top and bottom edges. */
+function scrollParent(el) {
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const o = getComputedStyle(p).overflowY;
+    if ((o === "auto" || o === "scroll") && p.scrollHeight > p.clientHeight) return p;
+  }
+  return null;     // the window
+}
+function wireDrag(box) {
+  box.addEventListener("pointerdown", (ev) => {
+    const h = ev.target.closest(".de-handle");
+    if (!h || (ev.pointerType === "mouse" && ev.button !== 0)) return;
+    ev.preventDefault();
+    const row = h.closest(".duty-row"), r = row.getBoundingClientRect(), sp = scrollParent(box);
+    const ph = document.createElement("div");
+    ph.className = "duty-row-ph"; ph.style.height = r.height + "px";
+    row.after(ph);
+    const off = ev.clientY - r.top;
+    Object.assign(row.style, { position: "fixed", left: r.left + "px", top: r.top + "px", width: r.width + "px", zIndex: 2000 });
+    row.classList.add("dragging"); document.body.classList.add("duty-dragging");
+    let y = ev.clientY, raf = 0;
+    const place = () => {
+      row.style.top = (y - off) + "px";
+      const others = [...box.querySelectorAll(".duty-row:not(.dragging)")];
+      const before = others.find((o) => { const b = o.getBoundingClientRect(); return y < b.top + b.height / 2; });
+      if (before) { if (ph.nextElementSibling !== before) box.insertBefore(ph, before); } else if (box.lastElementChild !== ph) box.appendChild(ph);
+    };
+    const tick = () => {     // auto-scroll near the edges of the sheet (or the window)
+      const top = sp ? sp.getBoundingClientRect().top : 0, bot = sp ? sp.getBoundingClientRect().bottom : window.innerHeight, edge = 60;
+      const d = y < top + edge ? -Math.ceil((top + edge - y) / 4) : y > bot - edge ? Math.ceil((y - (bot - edge)) / 4) : 0;
+      if (d) { if (sp) sp.scrollTop += d; else window.scrollBy(0, d); place(); }
+      raf = requestAnimationFrame(tick);
+    };
+    const move = (e) => { y = e.clientY; place(); };
+    const end = () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", end);
+      ph.replaceWith(row);
+      row.classList.remove("dragging"); document.body.classList.remove("duty-dragging");
+      Object.assign(row.style, { position: "", left: "", top: "", width: "", zIndex: "" });
+    };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", end); window.addEventListener("pointercancel", end);
+    raf = requestAnimationFrame(tick);
+  });
 }

@@ -8,7 +8,7 @@ import { doc, collection, setDoc, getDoc, getDocs, query, where, serverTimestamp
   from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 import { $, esc, toast } from "./ui.js?v=16";
 import { CHECK_ITEMS, NOTE_MAX, DEFECT_LINES, DEFECT_LINE_MAX, DUTY_NO_MAX, SIG_TARGET, ukDate, checkPredrive, allOk, buildPredrive,
-  predriveDefects, checkEndOfDuty, buildEndOfDuty } from "./defects.js?v=18";
+  predriveDefects, checkEndOfDuty, buildEndOfDuty, FUEL_LEVELS } from "./defects.js?v=23";
 
 let ctx = null;                 // { db, user, profile, companyId }
 const PENDING_KEY = "rt_vc_pending";
@@ -212,13 +212,16 @@ export function openPredrive(o) {
   // o: { vehicle: { id?, reg }, day }
   return new Promise((resolve) => {
     const v = o.vehicle || {}, day = o.day;
-    const st = { items: {}, notes: {}, mileage: "", dutyNo: "", tried: false };
+    const st = { items: {}, notes: {}, mileage: "", fuelLevel: "", dutyNo: "", tried: false };
     show('<div class="vc-paper white" data-sheet="predrive">' +
       '<div class="vc-head"><h2 id="vcTitle">Drivers 1st Use Pre Drive Away Check</h2>' +
       '<div class="vc-sub">To be completed (and handed in) <b>before</b> taking the vehicle from the depot</div></div>' +
       '<div class="vc-grid">' + field("Date", ukDate(day), "vcDate") + field("Name", driverName(), "vcName") + field("Full reg.", v.reg, "vcReg") +
       '<label class="vc-f"><span class="vc-fl">Duty no.</span><input type="text" id="vcDutyNo" maxlength="' + DUTY_NO_MAX + '" autocomplete="off"></label>' +
-      '<label class="vc-f"><span class="vc-fl">Mileage <span class="req">*</span></span><input type="text" id="vcMileage" inputmode="numeric" maxlength="9" autocomplete="off" placeholder="e.g. 120345"></label></div>' +
+      '<label class="vc-f"><span class="vc-fl">Mileage <span class="req">*</span></span><input type="text" id="vcMileage" inputmode="numeric" maxlength="9" autocomplete="off" placeholder="e.g. 120345"></label>' +
+      // v23: fuel level - five tick boxes, one choice, required
+      '<div class="vc-f vc-fuel" id="vcFuel" role="radiogroup" aria-labelledby="vcFuelL"><span class="vc-fl" id="vcFuelL">Fuel level <span class="req">*</span></span><div class="vc-fuel-boxes">' +
+      FUEL_LEVELS.map(([k, l]) => '<button type="button" class="vc-fuel-b" role="radio" aria-checked="false" data-fuel="' + k + '"><span class="vc-fuel-tick" aria-hidden="true"></span><span>' + l + "</span></button>").join("") + "</div></div></div>" +
       '<div class="vc-bar"><span>Tick if OK – “X” if not</span><button type="button" class="vc-allok" id="vcAllOk">✓ All OK</button></div>' +
       '<div class="vc-items" id="vcItems">' + CHECK_ITEMS.map((it) =>
         '<div class="vc-item" data-item="' + it.key + '"><div class="vc-row"><div class="vc-lbl">' + esc(it.label) + '</div><div class="vc-tg" role="group" aria-label="' + esc(it.label) + '">' +
@@ -241,6 +244,8 @@ export function openPredrive(o) {
         row.classList.toggle("missing", st.tried && (chk.missing.includes(k) || chk.needNote.includes(k)));
       });
       $("vcMileage").classList.toggle("missing", st.tried && chk.mileage === null);
+      $("vcFuel").classList.toggle("missing", st.tried && !chk.fuelOk);
+      $("vcFuel").querySelectorAll("[data-fuel]").forEach((b) => { const on = b.dataset.fuel === st.fuelLevel; b.classList.toggle("on", on); b.setAttribute("aria-checked", on ? "true" : "false"); });
       if (st.tried) $("vcMsg").textContent = chk.errors.join(" ");
       return chk;
     };
@@ -254,11 +259,12 @@ export function openPredrive(o) {
     items.addEventListener("input", (ev) => { const n = ev.target.closest(".vc-note"); if (n) { st.notes[n.closest(".vc-item").dataset.item] = n.value; if (st.tried) paint(); } });
     $("vcMileage").addEventListener("input", (e) => { st.mileage = e.target.value; if (st.tried) paint(); });
     $("vcDutyNo").addEventListener("input", (e) => { st.dutyNo = e.target.value; });
+    $("vcFuel").addEventListener("click", (e) => { const b = e.target.closest("[data-fuel]"); if (b) { st.fuelLevel = b.dataset.fuel; paint(); } });
     $("vcAllOk").addEventListener("click", () => { st.items = allOk(st.items); paint(); });
     $("vcSubmit").addEventListener("click", async () => {
       st.tried = true;
       const chk = paint();
-      if (!chk.ok) { const m = items.querySelector(".vc-item.missing") || $("vcMileage"); if (m && m.scrollIntoView) m.scrollIntoView({ block: "center" }); return; }
+      if (!chk.ok) { const m = (!chk.fuelOk && $("vcFuel")) || items.querySelector(".vc-item.missing") || $("vcMileage"); if (m && m.scrollIntoView) m.scrollIntoView({ block: "center" }); return; }
       $("vcSubmit").disabled = true; $("vcSubmit").textContent = "Sending…";
       const data = buildPredrive({ ...st, driverUid: ctx.user.uid, driverName: driverName(), dutyDay: day, vehicleId: v.id, vehicleReg: v.reg });
       const res = await save(data);

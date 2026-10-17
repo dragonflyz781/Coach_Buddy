@@ -6,7 +6,7 @@ import { doc, collection, updateDoc, deleteDoc, onSnapshot, query, where, orderB
   from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 import { $, esc, toast, setView, friendlyError, toggleTheme } from "./ui.js?v=16";
 import { CHECK_ITEMS, ITEM_LABEL, KIND_LABEL, STATUS_LABEL, normDefect, filterDefects, sortForMaintenance, byNewest, defectLines,
-  buildDefectCsv, ukDate, londonIsoDate, londonDateTime } from "./defects.js?v=18";
+  buildDefectCsv, ukDate, londonIsoDate, londonDateTime, fuelLabel } from "./defects.js?v=23";
 
 const RULES_MSG = "Vehicle defects can’t be loaded yet – publish the updated Firestore rules (firestore-rules-paste-into-firebase.txt) in the Firebase console.";
 
@@ -84,7 +84,8 @@ function makeList(ctx, opt) {
     let h = '<div class="dfx-detail">';
     h += '<div class="dfx-meta"><span>Date <b>' + esc(ukDate(r.dutyDay)) + "</b></span><span>Name <b>" + esc(r.driverName) + "</b></span><span>Full reg. <b>" + esc(r.vehicleReg) + "</b></span>" +
       (r.dutyNo ? "<span>Duty no. <b>" + esc(r.dutyNo) + "</b></span>" : "") +
-      (r.kind === "predrive" ? "<span>Mileage <b>" + (r.mileage === null ? "—" : r.mileage.toLocaleString("en-GB")) + "</b></span>"
+      (r.kind === "predrive" ? "<span>Mileage <b>" + (r.mileage === null ? "—" : r.mileage.toLocaleString("en-GB")) + "</b></span>" +
+        '<span class="dfx-fuel">Fuel level <b>' + esc(fuelLabel(r.fuelLevel) || "—") + "</b></span>"
         : (r.startMileage !== null ? "<span>Start mileage <b>" + r.startMileage.toLocaleString("en-GB") + "</b></span>" : "") +
           "<span>End mileage <b>" + (r.endMileage === null ? "—" : r.endMileage.toLocaleString("en-GB")) + "</b>" +
           (r.startMileage !== null && r.endMileage !== null && r.endMileage < r.startMileage ? ' <span class="dfx-warn">lower than start</span>' : "") + "</span>") + "</div>";
@@ -111,12 +112,13 @@ function makeList(ctx, opt) {
         '<label>Note <span class="muted">(optional)</span><input type="text" name="note" maxlength="500" placeholder="e.g. Mirror glass replaced"></label></div>' +
         '<button class="btn primary small" type="submit">✔ Mark rectified</button><span class="dfx-rect-msg" role="status"></span></form>';
     }
-    if (isAdmin) h += '<div class="dfx-tools"><button class="btn small danger" type="button" data-act="delete">Delete sheet</button></div>';
+    h += '<div class="dfx-tools"><button class="btn small" type="button" data-act="print">🖨 Print sheet</button>' + (isAdmin ? '<button class="btn small danger" type="button" data-act="delete">Delete sheet</button>' : "") + "</div>";
     return h + "</div>";
   }
   m.addEventListener("click", async (ev) => {
     const t = ev.target.closest("[data-act]"); if (!t) return;
     const item = t.closest(".dfx-item"), id = item && item.dataset.defId; if (!id) return;
+    if (t.dataset.act === "print") { printSheet(item); return; }
     if (t.dataset.act === "toggle") { S.open.has(id) ? S.open.delete(id) : S.open.add(id); render(); }
     else if (t.dataset.act === "delete") {
       if (!confirm("Delete this vehicle sheet? This can’t be undone.")) return;
@@ -173,4 +175,16 @@ export function showMaintenance(ctx) {
 export function stopDefectLists() {
   if (adminList) { adminList.stop(); adminList = null; }
   if (maintList) { maintList.stop(); maintList = null; }
+}
+
+/* v23: print one vehicle sheet (as shown, without the buttons / rectify form) */
+function printSheet(item) {
+  let p = document.getElementById("defectPrint");
+  if (!p) { p = document.createElement("div"); p.id = "defectPrint"; document.body.appendChild(p); }
+  p.innerHTML = item.innerHTML;
+  p.querySelectorAll("form, .dfx-tools, button").forEach((x) => x.remove());
+  document.body.classList.add("printing-defect");
+  const done = () => { document.body.classList.remove("printing-defect"); window.removeEventListener("afterprint", done); };
+  window.addEventListener("afterprint", done);
+  setTimeout(() => { try { window.print(); } catch (e) { /* ignore */ } setTimeout(done, 500); }, 50);
 }

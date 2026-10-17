@@ -63,6 +63,9 @@ export function londonDateTime(ms) {
 
 /* ------------------------------------------------------------------ white sheet */
 /* items: { key: 'ok'|'x'|'na' }, notes: { key: text } -> what still needs doing */
+/* v23: fuel level ticked on the white sheet (one of five, like the paper tick boxes) */
+export const FUEL_LEVELS = [["empty", "Empty"], ["1/4", "1/4"], ["1/2", "1/2"], ["3/4", "3/4"], ["full", "Full"]];
+export const fuelLabel = (v) => (FUEL_LEVELS.find((x) => x[0] === v) || [, ""])[1];
 export function checkPredrive(f) {
   const items = (f && f.items) || {}, notes = (f && f.notes) || {};
   const missing = [], needNote = [], errors = [];
@@ -74,10 +77,12 @@ export function checkPredrive(f) {
   });
   const mileage = parseMileage(f && f.mileage);
   if (mileage === null) errors.push("Enter the vehicle mileage.");
+  const fuelOk = !!fuelLabel(f && f.fuelLevel);
+  if (!fuelOk) errors.push("Tick the fuel level.");
   if (missing.length) errors.push(missing.length === 1 ? "1 check still needs a tick or an X." : missing.length + " checks still need a tick or an X.");
   if (needNote.length) errors.push("Say what's wrong for every X.");
   if (String((f && f.dutyNo) || "").length > DUTY_NO_MAX) errors.push("Duty no. is too long.");
-  return { ok: !errors.length, errors, missing, needNote, mileage };
+  return { ok: !errors.length, errors, missing, needNote, mileage, fuelOk };
 }
 /* "All OK": every unanswered item becomes OK; X / N/A answers are kept */
 export function allOk(items) {
@@ -104,6 +109,7 @@ export function buildPredrive(f) {
     mileage: parseMileage(f.mileage), items, notes, nil: !hasDefect, hasDefect, status: hasDefect ? "open" : "nil"
   };
   if (f.vehicleId) d.vehicleId = String(f.vehicleId).slice(0, 128);
+  if (fuelLabel(f.fuelLevel)) d.fuelLevel = f.fuelLevel;
   const dn = String(f.dutyNo || "").trim().slice(0, DUTY_NO_MAX);
   if (dn) d.dutyNo = dn;
   return d;
@@ -160,7 +166,7 @@ export function normDefect(id, d) {
     id, kind: d.kind === "endofduty" ? "endofduty" : "predrive", vehicleId: d.vehicleId || "", vehicleReg: String(d.vehicleReg || ""),
     driverUid: d.driverUid || "", driverName: String(d.driverName || ""), dutyDay: String(d.dutyDay || ""), dutyNo: String(d.dutyNo || ""),
     mileage: typeof d.mileage === "number" ? d.mileage : null, startMileage: typeof d.startMileage === "number" ? d.startMileage : null,
-    endMileage: typeof d.endMileage === "number" ? d.endMileage : null,
+    endMileage: typeof d.endMileage === "number" ? d.endMileage : null, fuelLevel: fuelLabel(d.fuelLevel) ? d.fuelLevel : "",
     items: d.items && typeof d.items === "object" ? d.items : {}, notes: d.notes && typeof d.notes === "object" ? d.notes : {},
     defects: Array.isArray(d.defects) ? d.defects.map(String) : [], nil: !!d.nil, hasDefect: !!d.hasDefect,
     signature: typeof d.signature === "string" && /^data:image\/(png|jpeg);base64,/.test(d.signature) ? d.signature : "",
@@ -189,9 +195,9 @@ export function sortForMaintenance(list) {
 const csvCell = (v) => { const s = v === null || v === undefined ? "" : String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
 export function buildDefectCsv(list) {
   const rows = [["Duty day", "Submitted", "Sheet", "Vehicle", "Driver", "Duty no", "Start mileage", "End mileage", "Result", "Defects",
-    "Status", "Rectified by", "Rectified on", "Rectified note"]];
+    "Status", "Rectified by", "Rectified on", "Rectified note", "Fuel level"]];
   list.forEach((r) => rows.push([r.dutyDay, r.createdAt ? new Date(r.createdAt).toISOString() : "", KIND_LABEL[r.kind], r.vehicleReg, r.driverName,
     r.dutyNo, r.kind === "predrive" ? r.mileage : r.startMileage, r.endMileage, r.hasDefect ? "Defect" : "Nil", defectLines(r).join(" | "),
-    STATUS_LABEL[r.status], r.rectifiedBy, r.rectifiedOn, r.rectifiedNote]));
+    STATUS_LABEL[r.status], r.rectifiedBy, r.rectifiedOn, r.rectifiedNote, fuelLabel(r.fuelLevel)]));
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
