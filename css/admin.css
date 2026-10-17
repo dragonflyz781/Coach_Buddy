@@ -707,3 +707,36 @@ form.msg-compose > .btn.primary{ width:auto; margin-top:0; flex:0 0 auto; min-wi
   .duty-rows-head span:nth-child(3){ display:none; }
   .duty-row .de-routecell{ grid-column:1 / -1; order:5; }
 }
+
+/* ---------- v23: drag rows to reorder (⋮⋮ handle, ▲▼ fallback, drop placeholder) ---------- */
+.duty-rows-head, .duty-row{ grid-template-columns:50px 72px 1fr minmax(120px, 34%) 34px; }
+.de-move{ display:flex; align-items:center; gap:1px; }
+.de-handle{ cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; font-size:18px; line-height:1; letter-spacing:-3px; color:var(--muted); padding:10px 4px 10px 2px; border-radius:6px; flex:0 0 auto; }
+.de-ud .mini{ flex:0 0 auto; }
+.de-handle:hover{ background:color-mix(in srgb, var(--route) 12%, transparent); color:var(--text); }
+.de-ud{ display:flex; flex-direction:column; gap:1px; }
+.de-ud .mini{ width:18px; height:17px; padding:0; font-size:8px; line-height:15px; min-height:0; min-width:0; }
+.duty-row.dragging{ background:var(--surface); box-shadow:0 10px 28px rgba(0,0,0,.25); border-radius:10px; opacity:.96; pointer-events:none; }
+.duty-row-ph{ border:2px dashed var(--route); border-radius:10px; background:color-mix(in srgb, var(--route) 8%, transparent); box-sizing:border-box; }
+body.duty-dragging, body.duty-dragging *{ cursor:grabbing !important; user-select:none; -webkit-user-select:none; }
+@media (max-width:620px){
+  .duty-rows-head, .duty-row{ grid-template-columns:50px 56px 1fr 32px; }
+  .duty-rows-head span:nth-child(3){ display:inline; }
+  .duty-row .de-del{ grid-row:1; grid-column:4; }
+  .duty-rows-head span:nth-child(4){ display:none; }
+}
+
+/* ---------- v23: fuel level tick boxes on the white sheet + printing one vehicle sheet ---------- */
+.vc-fuel{ grid-column:1 / -1; }
+.vc-fuel-boxes{ display:grid; grid-template-columns:repeat(5, 1fr); gap:6px; }
+.vc-fuel-b{ display:flex; flex-direction:column; align-items:center; gap:4px; padding:8px 2px 7px; border:1.5px solid var(--line); border-radius:10px; background:var(--surface); color:var(--text); font:inherit; font-size:14px; font-weight:700; cursor:pointer; min-height:56px; }
+.vc-fuel-tick{ width:22px; height:22px; border:2px solid currentColor; border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:16px; line-height:1; }
+.vc-fuel-b.on{ border-color:var(--route); background:color-mix(in srgb, var(--route) 14%, var(--surface)); }
+.vc-fuel-b.on .vc-fuel-tick::after{ content:"✓"; }
+.vc-fuel.missing .vc-fuel-b{ border-color:var(--danger); }
+.vc-fuel-b:focus-visible{ outline:2px solid var(--route); outline-offset:1px; }
+#defectPrint{ display:none; }
+@media print{
+  body.printing-defect > *:not(#defectPrint){ display:none !important; }
+  body.printing-defect #defectPrint{ display:block !important; color:#000; background:#fff; }
+}
