@@ -11,7 +11,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/leaflet.css">
 <link rel="stylesheet" href="css/app.css?v=17">      <!-- the original driver app styles, unchanged -->
-<link rel="stylesheet" href="css/admin.css?v=23">    <!-- sign-in, admin and layout additions -->
+<link rel="stylesheet" href="css/admin.css?v=24">    <!-- sign-in, admin and layout additions -->
 </head>
 <body class="view-boot">
 
@@ -34,6 +34,8 @@
     </div>
     <h1 class="wl-hello" id="wlHello">Welcome</h1>
     <div class="wl-company" id="wlCompany"></div>
+    <div class="wl-date" id="wlDate"></div>
+    <div class="wl-duty" id="wlDuty" style="display:none"></div>
     <div class="wl-pick" id="wlPick" style="display:none">
       <div class="wl-pick-head"><button class="wl-back" id="wlBack" type="button" style="display:none" aria-label="Back to the service types">← Back</button>
         <div class="wl-pick-q" id="wlPickQ">What are you doing today?</div></div>
@@ -284,6 +286,15 @@
 
 <!-- v21: driver messages / My duties sheet, and the pop-up for a new message -->
 <div class="mc-overlay" id="mcOverlay" style="display:none" role="dialog" aria-modal="true"><div class="mc-sheet" id="mcSheet"></div></div>
+<!-- v24: duty change alert (pop-up; a small banner in Sat-Nav) -->
+<div class="duty-pop" id="dutyPop" style="display:none" role="alertdialog" aria-labelledby="dutyPopTitle" aria-describedby="dutyPopList">
+  <div class="duty-pop-card">
+    <div class="duty-pop-title"><span aria-hidden="true">📅</span> <span id="dutyPopTitle">Your duty has changed</span></div>
+    <div class="duty-pop-list" id="dutyPopList"></div>
+    <button class="linkish duty-pop-notif" type="button" id="dutyPopNotif" style="display:none">🔔 Also alert me when the app is in the background</button>
+    <div class="msg-pop-btns"><button class="btn" type="button" id="dutyPopView">View</button><button class="btn primary" type="button" id="dutyPopOk">OK</button></div>
+  </div>
+</div>
 <div class="msg-pop" id="msgPop" style="display:none" role="alertdialog" aria-labelledby="msgPopTitle" aria-describedby="msgPopText">
   <div class="msg-pop-card">
     <div class="msg-pop-title" id="msgPopTitle">💬 New message</div>
@@ -474,6 +485,6 @@
 <script src="vendor/leaflet.js"></script>
 <script src="vendor/leaflet-rotate.js"></script>
 <script src="js/driver-app.js?v=22"></script>
-<script type="module" src="js/main.js?v=23"></script>
+<script type="module" src="js/main.js?v=24"></script>
 </body>
 </html>
