@@ -314,7 +314,7 @@ service cloud.firestore {
       // -------------------------------------------------------------- defects (v18)
       // One document per paper sheet:
       //   { kind: 'predrive' | 'endofduty', vehicleId?, vehicleReg, driverUid (== the signed-in user), driverName,
-      //     dutyDay ('YYYY-MM-DD', 05:00-05:00 London), dutyNo?, mileage? (start, white sheet), startMileage?, endMileage? (pink),
+      //     dutyDay ('YYYY-MM-DD', 05:00-05:00 London), dutyNo?, mileage? (start, white sheet), fuelLevel? (v23, white sheet: 'empty'|'1/4'|'1/2'|'3/4'|'full'), startMileage?, endMileage? (pink),
       //     items? { itemKey: 'ok'|'x'|'na' }, notes? { itemKey: 'what is wrong' }   (white sheet checklist, <= 30 items)
       //     defects? ['...', <= 3 lines]  (pink sheet), nil (bool), hasDefect (bool, == !nil),
       //     signature? (PNG data URL, <= 70000 chars), signedName?, createdAt (server time),
@@ -326,7 +326,7 @@ service cloud.firestore {
         function optMiles(d, k)    { return !(k in d) || (d[k] is number && d[k] >= 0 && d[k] <= 10000000); }
         function validSheet(d) {
           return d.keys().hasOnly(['kind','vehicleId','vehicleReg','driverUid','driverName','dutyDay','dutyNo','mileage','startMileage',
-                                   'endMileage','items','notes','defects','nil','hasDefect','signature','signedName','createdAt','status'])
+                                   'endMileage','fuelLevel','items','notes','defects','nil','hasDefect','signature','signedName','createdAt','status'])
               && d.keys().hasAll(['kind','vehicleReg','driverUid','driverName','dutyDay','nil','hasDefect','createdAt','status'])
               && d.kind in ['predrive', 'endofduty']
               && d.driverUid == request.auth.uid
@@ -335,6 +335,7 @@ service cloud.firestore {
               && optStr(d, 'vehicleId', 128) && optStr(d, 'dutyNo', 40) && optStr(d, 'signedName', 120)
               && d.dutyDay is string && d.dutyDay.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
               && optMiles(d, 'mileage') && optMiles(d, 'startMileage') && optMiles(d, 'endMileage')
+              && (!('fuelLevel' in d) || (d.kind == 'predrive' && d.fuelLevel in ['empty', '1/4', '1/2', '3/4', 'full']))   // v23: white sheet fuel tick
               && (!('items' in d) || (d.items is map && d.items.size() <= 30))
               && (!('notes' in d) || (d.notes is map && d.notes.size() <= 30))
               && (!('defects' in d) || (d.defects is list && d.defects.size() <= 3))
