@@ -168,6 +168,18 @@ A confirm dialog comes before any write; tracks go through the normal encoding/s
 * **Deploy the backend (from this folder, after `firebase login`):** `firebase deploy --only firestore,functions --project workplace-tracker-3712d`. The site itself stays on GitHub Pages – `firebase.json` has no hosting section (the local test setup uses `firebase.emulators.json`).
 * **Tests:** `npm run test:functions` runs both functions in the emulator (nothing is sent to FCM there; each push is logged to `companies/{cid}/pushLog`).
 
+### 4h. New in v26 – lorry / coach-aware Sat-Nav routes (TomTom, needs Blaze)
+
+- **Cloud Function `hgvRoute`** (callable, 2nd gen, Node 22, europe-west2, `functions/index.js` + `functions/hgv.js`): signed-in admins / drivers only. Takes `{ points:[[lat,lng]…], vehicle:{ heightM, widthM, lengthM, weightKg } }` and asks the TomTom Routing API (`calculateRoute`) for a **truck** route (`travelMode=truck`, `vehicleCommercial=true`, `routeType=fastest`, traffic, `instructionsType=text`, `language=en-GB`). TomTom's `bus` mode is BETA with incomplete restriction data, so `truck` is used – it honours height / width / length / weight restrictions.
+- More than 152 points (origin + 150 waypoints + destination) → split into chunks that share their join point; the legs, distances, times and turn instructions are joined.
+- Key: Firebase secret **`TOMTOM_KEY`** (`defineSecret`). Never in the site files.
+- Cache: `routeCache/{sha256(points + dimensions)}` for 7 days (server-only; `expiresAt` is a Firestore TTL field in `firestore.indexes.json`). Cache hits don't use TomTom quota.
+- Rate limit: `rateLimits/{uid}` – 20 TomTom calls per 10 minutes and 200 per day per user, plus `rateLimits/_global` 600 a day for the company (≈18K a month, under TomTom's 20K free routing requests).
+- **App**: with a picked vehicle that has dimensions, “Directions to first stop” and the new **off-route re-route** in Sat-Nav (3 GPS fixes > 150 m off the planned route after stop 1, at most once a minute and after moving 200 m; cleared when back within 40 m) use the lorry route; the Sat-Nav shows **“🚛 Lorry route for 4.2m high”** and follows its turn instructions while off the orange line. No dimensions or any error → standard OSRM route with **“Standard route – lorry restrictions not checked”**.
+- **Admin → Vehicles** flags vehicles missing height / width / length / weight.
+- Deploy (after setting the key once with `firebase functions:secrets:set TOMTOM_KEY --project workplace-tracker-3712d`): `firebase deploy --only functions,firestore --project workplace-tracker-3712d`.
+- Emulator tests use a fake TomTom (`functions/.secret.local` with a `mock-…` key; not uploaded – `*.local` is in the functions ignore list).
+
 ## 5. Testing – what was actually run
 
 Everything below was run on the build box against the **Firebase emulators** (Auth + Firestore + Hosting), headless Chrome 

@@ -39,3 +39,30 @@ export function vehicleDims(v) {
   if (v.weight != null) bits.push(v.weight + " t");
   return bits.join(" · ");
 }
+
+/* v26: lorry / coach routing (TomTom, functions/hgv.js). Units for the router: metres + kilograms.
+   null = no dimension at all (the app falls back to the standard OSRM route). */
+export const HGV_FIELDS = [["height", "height"], ["width", "width"], ["length", "length"], ["weight", "weight"]];
+export function hgvDims(v) {
+  if (!v) return null;
+  const pos = (x) => (typeof x === "number" && Number.isFinite(x) && x > 0 ? x : null);
+  const out = {};
+  if (pos(v.height)) out.heightM = pos(v.height);
+  if (pos(v.width)) out.widthM = pos(v.width);
+  if (pos(v.length)) out.lengthM = pos(v.length);
+  if (pos(v.weight)) out.weightKg = Math.round(pos(v.weight) * 1000);
+  return Object.keys(out).length ? out : null;
+}
+/* which of height / width / length / weight are missing (lorry routing checks all four) */
+export function missingDims(v) {
+  return HGV_FIELDS.filter(([k]) => !(v && typeof v[k] === "number" && v[k] > 0)).map(([, label]) => label);
+}
+/* "Lorry route for 4.2 m high" (height is what matters most for bridges; otherwise the first dimension set) */
+export function hgvBadge(d) {
+  if (!d) return "";
+  if (d.heightM) return "Lorry route for " + d.heightM + "m high";
+  if (d.weightKg) return "Lorry route for " + Math.round(d.weightKg / 100) / 10 + "t";
+  if (d.widthM) return "Lorry route for " + d.widthM + "m wide";
+  if (d.lengthM) return "Lorry route for " + d.lengthM + "m long";
+  return "";
+}

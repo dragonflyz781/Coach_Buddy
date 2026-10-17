@@ -11,7 +11,7 @@ import {
 import { isConfigured, isEmulator, auth, db } from "./firebase-init.js?v=16";
 import { $, setView, toast, friendlyError, readServicePick, wireServicePick } from "./ui.js?v=16";
 import { decodePolyline, densify } from "./geo.js?v=16";
-import { initAdmin, showAdmin, onRoutesChanged, onCompanyChanged, onVehiclesChanged } from "./admin.js?v=25";
+import { initAdmin, showAdmin, onRoutesChanged, onCompanyChanged, onVehiclesChanged } from "./admin.js?v=26";
 import { initDriverMessages, stopDriverMessages, stopAdminMessages, openDriverMessages, adminOpenThread } from "./messages.js?v=25";
 import { initPush, stopPush, pushSignOut, onPushOpen } from "./push.js?v=25";     // v25: phone notifications
 import { initDriverDuties, stopDriverDuties, stopAdminDuties, todayDuty, openDuties, driverDuties, driverDutyChangedIds, dutiesReady } from "./duties.js?v=25";
@@ -23,8 +23,9 @@ import { resolveOperator } from "./operator.js?v=16";
 import { pickedServiceTypes, welcomeName, selLabel, selMatches, encodeSel, decodeSel, picksFromSel, routeRank, routeSlotLabel,
   dutyDay, prevDutyDay } from "./services.js?v=16";
 import { planDocId, planCacheKey, cleanPlan, mergePlans, planDoc } from "./dayplan.js?v=16";
-import { vehicleDims } from "./vehicles.js?v=16";
-import { runWelcome, welcomeRefresh } from "./welcome.js?v=24";
+import { vehicleDims, hgvDims, hgvBadge } from "./vehicles.js?v=26";
+import { initHgv } from "./hgv.js?v=26";                                    // v26: lorry routing (hgvRoute)
+import { runWelcome, welcomeRefresh } from "./welcome.js?v=26";
 
 const session = { user: null, profile: null, company: null, companyId: null, unsubRoutes: null, unsubCompany: null, rawRoutes: {},
   routesReady: null, routesLoaded: null, pick: null, vehicles: {}, unsubVehicles: null, vehicleId: null,
@@ -89,6 +90,7 @@ async function startSession(user) {
       showMaintenance({ db, user, profile, companyId: session.companyId, company: session.company, signOutAndReset });
       return;
     }
+    initHgv();                                                                 // v26: lorry-aware Sat-Nav routes
     initPush({ db, user, profile, companyId: session.companyId });            // v25: refreshes this phone's push token if turned on
     $("acctLine").textContent = (profile.name || user.email) + " · " + session.company.name +
       " · " + (profile.role === "admin" ? "Administrator" : "Driver");
@@ -280,7 +282,8 @@ function storeVehicle(vOrId) {
   session.vehicleId = v && v.id ? v.id : null;
   try { if (session.vehicleId) localStorage.setItem(vehKey(), session.vehicleId); else localStorage.removeItem(vehKey()); } catch (e) { /* ignore */ }
   if (window.RoundTracker.setVehicle) {
-    window.RoundTracker.setVehicle(v && v.reg ? { id: v.id, reg: v.reg, dims: vehicleDims(v) } : null);
+    const hgv = v && v.reg ? hgvDims(v) : null;            // v26: lorry routing needs metres + kg
+    window.RoundTracker.setVehicle(v && v.reg ? { id: v.id, reg: v.reg, dims: vehicleDims(v), hgv, badge: hgvBadge(hgv) } : null);
   }
 }
 

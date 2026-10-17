@@ -19,7 +19,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/leaflet.css">
 <link rel="stylesheet" href="css/app.css?v=17">      <!-- the original driver app styles, unchanged -->
-<link rel="stylesheet" href="css/admin.css?v=25">    <!-- sign-in, admin and layout additions -->
+<link rel="stylesheet" href="css/admin.css?v=26">    <!-- sign-in, admin and layout additions -->
 </head>
 <body class="view-boot">
 
@@ -364,6 +364,7 @@
     </div>
   </div>
   <div class="satnav-then" id="satnavThen" style="display:none;"></div>
+  <div class="sn-route-badge" id="snRouteBadge" style="display:none;" role="status" aria-live="polite"></div>
 
   <div class="satnav-bottom" id="satnavBottom" style="display:none;">
     <div class="sb-stat"><div class="sb-val" id="sbEta">–</div><div class="sb-lbl">ETA</div></div>
@@ -493,7 +494,7 @@
 
 <script src="vendor/leaflet.js"></script>
 <script src="vendor/leaflet-rotate.js"></script>
-<script src="js/driver-app.js?v=22"></script>
-<script type="module" src="js/main.js?v=25"></script>
+<script src="js/driver-app.js?v=26"></script>
+<script type="module" src="js/main.js?v=26"></script>
 </body>
 </html>

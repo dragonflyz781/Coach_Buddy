@@ -1008,9 +1008,30 @@
     return total || fallbackDuration;
   }
 
-  function fetchOsrmRoute(origin, dest){
+  // v26: points = [[lat,lng], ...] in order (the public OSRM server: first 25); also returns turn instructions
+  // in the same shape as the lorry router (hgvRoute) so the Sat-Nav can follow either.
+  function osrmInstructions(legs){
+    var out = [], off = 0;
+    (legs||[]).forEach(function(leg, li){
+      (leg.steps||[]).forEach(function(st){
+        var m = st.maneuver || {}, mod = String(m.modifier||''), loc = m.location || [];
+        var dir = m.type==='arrive' ? 'arrive' : m.type==='depart' ? 'depart' : /uturn/.test(mod) ? 'uturn' : /left/.test(mod) ? 'left' : /right/.test(mod) ? 'right' : 'straight';
+        if((m.type==='depart' && li>0) || (m.type==='arrive' && li<legs.length-1)) dir = 'waypoint';
+        var road = st.name ? ' onto '+st.name : '';
+        var msg = dir==='arrive' ? 'You have arrived' : dir==='depart' ? 'Head off'+(st.name?' on '+st.name:'') :
+          (m.type==='roundabout'||m.type==='rotary') ? 'At the roundabout take exit '+(m.exit||1)+road :
+          dir==='uturn' ? 'Make a U-turn' : dir==='straight' ? 'Continue'+road : (/slight/.test(mod)?'Bear ':/sharp/.test(mod)?'Sharp ':'Turn ')+dir+road;
+        if(loc.length===2) out.push({ lat:loc[1], lng:loc[0], offset:off, dir:dir, message:msg });
+        off += st.distance||0;
+      });
+    });
+    return out;
+  }
+  function fetchOsrmRoute(points, dest){
+    if(dest) points = [points, dest];
+    points = points.slice(0, 25);
     var url = 'https://router.project-osrm.org/route/v1/driving/'+
-      origin[1]+','+origin[0]+';'+dest[1]+','+dest[0]+'?overview=full&geometries=geojson&steps=true';
+      points.map(function(p){ return p[1]+','+p[0]; }).join(';')+'?overview=full&geometries=geojson&steps=true';
     var controller = (typeof AbortController!=='undefined') ? new AbortController() : null;
     var t = controller ? setTimeout(function(){ controller.abort(); }, 6000) : null;
     return fetch(url, controller ? { signal: controller.signal } : {})
@@ -1023,9 +1044,10 @@
         if(!data || data.code!=='Ok' || !data.routes || !data.routes.length) return null;
         var route = data.routes[0];
         var coords = route.geometry.coordinates.map(function(c){ return [c[1], c[0]]; });
-        var steps = (route.legs && route.legs[0] && route.legs[0].steps) || [];
+        var steps = [];
+        (route.legs||[]).forEach(function(l){ steps = steps.concat(l.steps||[]); });
         var coachDuration = coachDurationFromSteps(steps, route.duration);
-        return { coords:coords, distance:route.distance, duration:coachDuration, carDuration:route.duration };
+        return { coords:coords, distance:route.distance, duration:coachDuration, carDuration:route.duration, instructions:osrmInstructions(route.legs) };
       })
       .catch(function(){ if(t) clearTimeout(t); return null; });
   }
@@ -1039,9 +1061,52 @@
   var guideLine = null, guiding = false;
   var guideNote = document.getElementById('guideNote');
 
+  /* ---- v26 lorry / coach-aware routing --------------------------------------------------------------
+     With a vehicle picked that has dimensions (selectedVehicle.hgv = {heightM,widthM,lengthM,weightKg}) and the
+     router from js/hgv.js (the hgvRoute Cloud Function -> TomTom truck routing), road routes respect height,
+     width, length and weight restrictions. Otherwise, or if it fails, the standard OSRM (car) route is used
+     with a visible note. Result: { coords, distance, duration, instructions, hgv, badge?, why? } or null. */
+  var hgvRouter = null, guideRes = null, guideMode = null;      // guideMode: 'first' (to stop 1) | 'reroute'
+  var STD_ROUTE_NOTE = 'Standard route – lorry restrictions not checked';
+  var routeBadge = document.getElementById('snRouteBadge');
+  function vehHgv(){ return selectedVehicle && selectedVehicle.hgv ? selectedVehicle.hgv : null; }
+  function fetchRoadRoute(points){
+    var dims = vehHgv();
+    function std(why){ return fetchOsrmRoute(points).then(function(o){ if(o){ o.hgv = false; o.why = why; } return o; }); }
+    if(!dims) return std('This vehicle has no dimensions set (admin → Vehicles).');
+    if(!hgvRouter) return std('Lorry routing is not available.');
+    return Promise.resolve().then(function(){ return hgvRouter(points, dims); }).then(function(res){
+      if(!res || !res.coords || res.coords.length < 2) return std('No lorry route found.');
+      res.hgv = true; res.badge = (selectedVehicle && selectedVehicle.badge) || 'Lorry route';
+      return res;
+    }, function(e){ return std('Lorry routing failed' + (e && e.message ? ': ' + String(e.message).slice(0, 80) : '') + '.'); });
+  }
+  function showRouteBadge(res){
+    if(!routeBadge) return;
+    if(!res){ routeBadge.style.display = 'none'; routeBadge.textContent = ''; return; }
+    routeBadge.className = 'sn-route-badge ' + (res.hgv ? 'hgv' : 'std');
+    routeBadge.textContent = res.hgv ? '🚛 ' + res.badge : '⚠ ' + STD_ROUTE_NOTE;
+    routeBadge.title = res.hgv ? 'TomTom truck routing using this vehicle\'s height, width, length and weight' : (res.why || '');
+    routeBadge.style.display = '';
+  }
+  function routeNoteText(res){
+    return res.hgv ? ' 🚛 ' + res.badge + ' (TomTom truck routing – avoids the low bridges, narrow and weight-limited roads it knows about).'
+                   : ' ' + STD_ROUTE_NOTE + ' – ' + (res.why ? res.why + ' ' : '') + 'Prefer the orange planned route once you join it.';
+  }
+  function setGuide(res, mode){
+    if(guideLine){ map.removeLayer(guideLine); guideLine = null; }
+    guideLine = L.polyline(res.coords, { color:getCss('--guide')||'#7c3aed', weight:6, opacity:.95, dashArray:'1,10', lineCap:'round' }).addTo(map);
+    guideRes = res; guideMode = mode; guiding = true;
+    var cum = [0];
+    for(var k=1;k<res.coords.length;k++) cum.push(cum[k-1] + haversineMeters(res.coords[k-1], res.coords[k]));
+    res._cum = cum;
+    showRouteBadge(res);
+  }
+
   function clearGuide(){
     if(guideLine){ map.removeLayer(guideLine); guideLine=null; }
-    guiding = false;
+    guiding = false; guideRes = null; guideMode = null; offTrackN = 0; backOnN = 0;
+    showRouteBadge(null);
     firstStopBtn.classList.remove('on');
     firstStopBtn.textContent = '📍  Directions to first stop';
     guideNote.textContent = '';
@@ -1068,7 +1133,7 @@
 
     firstStopBtn.disabled = true;
     guideNote.textContent = 'Finding your location…';
-    var COACH_NOTE = ' Live road routing uses a car profile (not coach/HGV) and may suggest roads unsuitable for coaches — prefer the orange planned route once you join it.';
+    var COACH_NOTE = ' ' + STD_ROUTE_NOTE + ' — no road-routing service reachable. Prefer the orange planned route once you join it.';
 
     function withOrigin(origin){
       // Soft mitigation: if you are already near the start of the recorded GPX/route track, draw along
@@ -1089,13 +1154,14 @@
         return;
       }
       guideNote.textContent = 'Working out a route to Stop 1…';
-      fetchOsrmRoute(origin, target).then(function(res){
+      fetchRoadRoute([origin, target]).then(function(res){
         if(guideLine){ map.removeLayer(guideLine); guideLine=null; }
         if(res){
-          guideLine = L.polyline(res.coords, { color:getCss('--guide')||'#7c3aed', weight:6, opacity:.95, dashArray:'1,10', lineCap:'round' }).addTo(map);
+          setGuide(res, 'first');
           var fd = fmtDist(res.distance);
-          guideNote.textContent = 'To Stop 1: '+fd.v+fd.u+' · about '+fmtDuration(res.duration)+' by road (coach pace, max '+COACH_MAX_MPH+' mph).'+COACH_NOTE;
+          guideNote.textContent = 'To Stop 1: '+fd.v+fd.u+' · about '+fmtDuration(res.duration)+' by road'+(res.hgv?' (lorry route).':' (coach pace, max '+COACH_MAX_MPH+' mph).')+routeNoteText(res);
         } else {
+          showRouteBadge({ hgv:false, why:'No road-routing service reachable.' });
           var d = haversineMeters(origin, target);
           guideLine = L.polyline([origin, target], { color:getCss('--guide')||'#7c3aed', weight:5, opacity:.9, dashArray:'2,10' }).addTo(map);
           var fd2 = fmtDist(d);
@@ -1378,6 +1444,7 @@
       currentGpsStopIdx = (ns && ns.dist<=AT_STOP_RADIUS_M) ? ns.index : null;
       markGpsHere();
       updateNextStop(latlng);
+      maybeReroute(r, latlng, d);
       updateNavBanner(r, latlng);
       // Sat-nav style: once stop 1 is reached, hide the path already travelled (display only)
       redrawActiveTrack();
@@ -1456,6 +1523,16 @@
       sbStop.textContent = '–';
     }
 
+    var gi = distanceToTrack(latlng, r.track) > 60 ? guideInstruction(latlng) : null;
+    if(gi){
+      var GG = { left:'↰', right:'↱', uturn:'↶', roundabout:'↻', arrive:'🏁', straight:'↑' };
+      var gd = fmtDist(gi.dist);
+      satnavArrow.textContent = GG[gi.now.dir] || '↑'; satnavDist.textContent = gd.v+gd.u;
+      satnavInstr.textContent = gi.now.message || '';
+      navTurnArrow.textContent = GG[gi.now.dir] || '↑'; navTurnDist.textContent = (gi.now.message || '') + ' in ' + gd.v+gd.u;
+      if(inSatnav && gi.then){ satnavThen.style.display = 'flex'; satnavThen.innerHTML = 'Then <span class="then-arrow">'+(GG[gi.then.dir]||'↑')+'</span> '+String(gi.then.message||'').replace(/[<>&]/g,'').slice(0,40); }
+    }
+
     if(inSatnav){
       var remainM = Math.max(0, (r._cum[r._cum.length-1]||0) - (r._cum[progressIdx]||0));
       var rd = fmtDist(remainM);
@@ -1468,6 +1545,43 @@
       var hh = etaDate.getHours(), mm = etaDate.getMinutes();
       sbEta.textContent = (hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
     }
+  }
+
+  /* v26: off the planned route in Sat-Nav (after joining it) -> a road route from here through the remaining
+     stops, lorry-aware when possible. Throttled: 3 fixes > OFF_ROUTE_M off, then at most one request per
+     REROUTE_MIN_MS and only after moving REROUTE_MIN_MOVE_M since the last one. Back on the route -> cleared. */
+  var OFF_ROUTE_M = 150, BACK_ON_M = 40, REROUTE_MIN_MS = 60000, REROUTE_MIN_MOVE_M = 200;
+  var offTrackN = 0, backOnN = 0, lastRerouteAt = 0, lastRerouteFrom = null, rerouteBusy = false;
+  function maybeReroute(r, latlng, dTrack){
+    if(!document.body.classList.contains('satnav-mode') || !navProg.started || !r.track || r.track.length < 3) { offTrackN = 0; return; }
+    if(guideMode === 'reroute' && dTrack <= BACK_ON_M){ if(++backOnN >= 2) clearGuide(); return; }
+    backOnN = 0;
+    if(dTrack <= OFF_ROUTE_M){ offTrackN = 0; return; }
+    if(++offTrackN < 3 || rerouteBusy) return;
+    if(guiding && guideLine && guideRes && distanceToTrack(latlng, guideRes.coords) <= 80) return;   // still on the detour
+    var now = Date.now();
+    if(now - lastRerouteAt < REROUTE_MIN_MS) return;
+    if(lastRerouteFrom && haversineMeters(lastRerouteFrom, latlng) < REROUTE_MIN_MOVE_M && guiding) return;
+    var rest = (r.stops || []).slice(navProg.stopIdx + 1);
+    if(!rest.length) rest = [r.track[r.track.length-1]];
+    lastRerouteAt = now; lastRerouteFrom = latlng; rerouteBusy = true;
+    fetchRoadRoute([latlng].concat(rest)).then(function(res){
+      rerouteBusy = false;
+      if(!res || !document.body.classList.contains('satnav-mode')) return;
+      setGuide(res, 'reroute');
+      var fd = fmtDist(res.distance);
+      guideNote.textContent = 'Re-routed: '+fd.v+fd.u+' to Stop '+(navProg.stopIdx+2 <= r.stops.length ? navProg.stopIdx+2 : r.stops.length)+' and on.'+routeNoteText(res);
+    }, function(){ rerouteBusy = false; });
+  }
+  /* while following a road route (to stop 1 or a re-route), off the orange track: its next turn instruction */
+  function guideInstruction(latlng){
+    if(!guiding || !guideRes || !guideRes.instructions || !guideRes.instructions.length || !guideRes._cum) return null;
+    var idx = findNearestTrackIndex(latlng, guideRes.coords);
+    if(idx < 0 || haversineMeters(latlng, guideRes.coords[idx]) > 120) return null;
+    var here = guideRes._cum[idx] * (guideRes.distance && guideRes._cum[guideRes._cum.length-1] ? guideRes.distance / guideRes._cum[guideRes._cum.length-1] : 1);
+    var list = guideRes.instructions.filter(function(x){ return x.dir !== 'depart' && x.dir !== 'waypoint'; });
+    for(var i=0;i<list.length;i++){ if(list[i].offset > here + 5) return { now:list[i], then:list[i+1] || null, dist: list[i].offset - here }; }
+    return null;
   }
 
   function onPositionError(err){
@@ -2494,6 +2608,8 @@
     },
     // v9: { id, reg, dims } or null – the vehicle picked on the welcome screen (shown in Finish & submit)
     setVehicle: function(v){ selectedVehicle = v || null; },
+    setRouter: function(fn){ hgvRouter = typeof fn === 'function' ? fn : null; },      // v26: js/hgv.js
+    routeState: function(){ return { guiding:guiding, mode:guideMode, hgv:!!(guideRes && guideRes.hgv), badge: routeBadge ? routeBadge.textContent : '', note: guideNote.textContent }; },
     getVehicle: function(){ return selectedVehicle; },
     show: function(){
       map.invalidateSize();

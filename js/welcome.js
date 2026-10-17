@@ -15,7 +15,7 @@ import {
   KIND_KEYS, KIND_LABEL, SLOT_LABEL, availableSlots, slotDestOptions,
   selFromSlots, selLabel, destKey, serviceIcon
 } from "./services.js?v=16";
-import { vehicleDims } from "./vehicles.js?v=16";
+import { vehicleDims } from "./vehicles.js?v=26";
 import { dutySel, dutyRuns, weekStrip, dayName, ukDate, routeLabel } from "./dutycore.js?v=24";
 
 const esc = (x) => String(x == null ? "" : x).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

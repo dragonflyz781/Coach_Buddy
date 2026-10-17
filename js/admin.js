@@ -8,7 +8,7 @@ import {
 import { createSecondaryAuth } from "./firebase-init.js?v=16";
 import { $, esc, toast, setView, friendlyError, toggleTheme, readServicePick, setServicePick, wireServicePick } from "./ui.js?v=16";
 import { normServiceTypes, pickedServiceTypes, defaultRouteServiceType, serviceLabel, serviceIcon, SERVICE_KEYS } from "./services.js?v=16";
-import { validateVehicle, cleanVehicle, vehicleDims } from "./vehicles.js?v=16";
+import { validateVehicle, cleanVehicle, vehicleDims, missingDims } from "./vehicles.js?v=26";
 import { parseGPX, fitTrack, decodePolyline, encodePolyline } from "./geo.js?v=16";
 import { initRuns } from "./runs.js?v=16";
 import { initAdminDefects } from "./defectlist.js?v=23";
@@ -1012,14 +1012,24 @@ function renderVehicleList() {
     return;
   }
   list.innerHTML = "";
+  // v26: lorry-aware Sat-Nav routes need height, width, length and weight - flag the vehicles that miss any
+  const short = ids.filter((id) => missingDims(rawVehicles[id]).length);
+  if (short.length) {
+    const sum = document.createElement("div");
+    sum.className = "veh-missing-summary"; sum.id = "vehMissingSummary";
+    sum.textContent = "⚠ " + short.length + " of " + ids.length + " vehicle" + (ids.length === 1 ? "" : "s") + " missing dimensions – the Sat-Nav's lorry routing only checks the ones that are set " +
+      "(no dimensions at all = standard route, no low-bridge / weight checks). Edit to add height, width, length and weight.";
+    list.appendChild(sum);
+  }
   ids.forEach((id) => {
     const v = rawVehicles[id], el = document.createElement("div");
     el.className = "arow"; el.dataset.vehId = id;
-    const dims = vehicleDims(v);
+    const dims = vehicleDims(v), miss = missingDims(v);
+    const flag = miss.length === 4 ? "" : miss.length ? '<br><span class="veh-missing" data-missing="' + miss.join(",") + '">⚠ Missing ' + esc(miss.join(", ")) + " – lorry routing limited</span>" : "";
     el.innerHTML =
       '<div class="route-badge">🚌</div>' +
       '<div class="route-meta"><div class="name">' + esc(v.reg || "—") + "</div>" +
-      '<div class="sub">' + (dims ? '<span class="veh-dims">' + esc(dims) + "</span>" : '<span class="muted">No dimensions set</span>') + "</div></div>" +
+      '<div class="sub">' + (dims ? '<span class="veh-dims">' + esc(dims) + "</span>" + flag : '<span class="veh-missing" data-missing="' + miss.join(",") + '">⚠ No dimensions set – standard route only (no lorry routing)</span>') + "</div></div>" +
       '<div class="arow-actions"><button class="btn small" data-act="edit">Edit</button>' +
       '<button class="btn small danger" data-act="del">Delete</button></div>';
     el.querySelector('[data-act="edit"]').addEventListener("click", () => fillVehForm(id));
