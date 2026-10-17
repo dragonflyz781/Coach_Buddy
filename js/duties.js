@@ -9,8 +9,8 @@ import { doc, collection, setDoc, deleteDoc, onSnapshot, query, where, serverTim
 import { $, esc, toast, friendlyError } from "./ui.js?v=16";
 import { dutyDay } from "./services.js?v=16";
 import { dutyId, addDays, weekStart, dayName, ukDate, monthGrid, monthTitle, shiftMonth, checkDuty, buildDuty, copyDuty, lastWeekCopies,
-  changedDuties, dutyStamp, worksheetHtml, isIsoDate,
-  routeGroups, findGroup, routeLabel, checkTemplate, buildTemplate, dutyFromTemplate, differsFromTemplate, assignDates, dayBoard } from "./dutycore.js?v=22";
+  changedDuties, dutyStamp, worksheetHtml, isIsoDate, knownMap, dutyAlerts, alertTitle, weekStrip,
+  routeGroups, findGroup, routeLabel, checkTemplate, buildTemplate, dutyFromTemplate, differsFromTemplate, assignDates, dayBoard } from "./dutycore.js?v=24";
 
 const RULES_MSG = "Duties can’t be loaded yet – publish the updated Firestore rules (firestore-rules-paste-into-firebase.txt) in the Firebase console.";
 const col = (c) => collection(c.db, "companies", c.companyId, "duties");
@@ -110,6 +110,9 @@ async function copyLastWeek() {
   const bad = res.filter((r) => r.status === "rejected");
   m.textContent = (copies.length - bad.length) + " copied" + (bad.length ? ", " + bad.length + " failed: " + errMsg(bad[0].reason) : " ✔");
 }
+/* v24: duties this admin deleted in this session (their own 'Duty removed' alert is skipped) */
+const SELF_DEL = new Set();
+const delDuty = (id) => { SELF_DEL.add(id); return deleteDoc(doc(col(A.c), id)); };
 const write = (d) => setDoc(doc(col(A.c), dutyId(d.driverUid, d.date)), { ...d, updatedAt: serverTimestamp(), updatedBy: A.c.user.uid });
 
 function openEditor(uid, date) {
@@ -265,7 +268,7 @@ async function saveDuty() {
     const prev = A.all[dutyId(A.ed.uid, A.ed.date)], tid = prev && prev.templateId;
     const edited = !!tid && (differsFromTemplate({ ...f, rows: chk.rows }, A.tpls[tid]) || (!A.tpls[tid] && !!prev.edited));
     await write(buildDuty({ ...f, rows: chk.rows, templateId: tid || "", edited }));
-    if (moved && A.ed.existing) await deleteDoc(doc(col(A.c), dutyId(A.ed.uid, A.ed.date)));
+    if (moved && A.ed.existing) await delDuty(dutyId(A.ed.uid, A.ed.date));
     toast("Duty saved ✔");
     A.ed = { uid: f.driverUid, date: f.date, existing: true };
     m.textContent = "Saved ✔"; setTitle();
@@ -277,7 +280,7 @@ async function saveDuty() {
 }
 async function deleteDuty() {
   if (!A.ed || !confirm("Delete this duty? The driver will no longer see it.")) return;
-  try { await deleteDoc(doc(col(A.c), dutyId(A.ed.uid, A.ed.date))); toast("Duty deleted."); closeEditor(); }
+  try { await delDuty(dutyId(A.ed.uid, A.ed.date)); toast("Duty deleted."); closeEditor(); }
   catch (e) { $("deMsg").textContent = errMsg(e); }
 }
 function addCopyDate(d) { if (!A.copyDates.includes(d)) A.copyDates.push(d); A.copyDates.sort(); renderCopy(); }
@@ -326,6 +329,7 @@ export function initDriverDuties(c) {
     D.err = ""; D.list = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => a.date.localeCompare(b.date));
     if (D.readyRes) { D.readyRes(); D.readyRes = null; }
     renderDriver();
+    checkAlerts();                                   // v24
   }, (err) => {
     console.warn("Duties not readable:", err && err.code); D.err = errMsg(err);
     if (D.readyRes) { D.readyRes(); D.readyRes = null; }
@@ -336,6 +340,7 @@ export function stopDriverDuties() {
   if (D.unsub) D.unsub(); D.unsub = null;
   if (D.readyRes) { D.readyRes(); D.readyRes = null; }
   if (D.open) closeDuties();
+  closeAlert(); D.alerts = []; D.rung = new Set();
   D.c = null; D.list = [];
   ["dutyBtn", "acctDuties"].forEach((id) => { const b = $(id); if (b) b.style.display = "none"; });
 }
@@ -348,6 +353,7 @@ export async function todayDuty(ms) {
 }
 function wireDriver() {
   D.wired = true;
+  wireAlert();
   $("dutyBtn").addEventListener("click", () => openDuties());
   $("acctDuties").addEventListener("click", () => { $("scrim").click(); openDuties(); });
 }
@@ -356,7 +362,12 @@ function renderDriver() {
   const n = changedDuties(D.list, getSeen(), dutyDay()).length;
   ["dutyBadge", "acctDutiesBadge"].forEach((id) => { const el = $(id); if (el) { el.textContent = n > 9 ? "9+" : String(n || ""); el.hidden = !n; el.style.display = n ? "" : "none"; } });
   if (D.open) { if (D.day) renderDay(); else renderCalendar(); }
+  if (D.c.onChange) D.c.onChange();                // v24: the welcome page's duty card / week strip
 }
+/* v24: for the welcome page */
+export const driverDuties = () => D.list.slice();
+export const driverDutyChangedIds = () => (D.c ? changedDuties(D.list, getSeen(), dutyDay()).map((d) => d.id) : []);
+export async function dutiesReady(ms) { if (D.ready) await Promise.race([D.ready, new Promise((r) => setTimeout(r, ms || 0))]); return D.list.slice(); }
 export function openDuties(date) {
   if (!D.c) return;
   D.open = true;
@@ -508,7 +519,7 @@ async function assignFromBoard(tid, cur, uid, sel) {
       if (ex && !confirm(teamName(uid) + " already has duty " + ex.dutyNo + " on " + ukDate(date) + ". Replace it with " + t.dutyNo + "?")) { sel.value = cur; return; }
       await write(dutyFromTemplate(t, { date, driverUid: uid, driverName: teamName(uid) }));
     }
-    if (cur && cur !== uid) await deleteDoc(doc(col(A.c), dutyId(cur, date)));
+    if (cur && cur !== uid) await delDuty(dutyId(cur, date));
     m.classList.add("ok");
     m.textContent = uid ? "Duty " + t.dutyNo + " given to " + teamName(uid) + " for " + ukDate(date) + " ✔" : "Duty " + t.dutyNo + " is not given out on " + ukDate(date) + ".";
   } catch (e) { m.classList.remove("ok"); m.textContent = errMsg(e); sel.value = cur; }
@@ -573,4 +584,98 @@ function wireDrag(box) {
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", end); window.addEventListener("pointercancel", end);
     raf = requestAnimationFrame(tick);
   });
+}
+
+/* ================================================================ v24: duty change alerts (driver)
+   Free and in-app only (Spark plan: no Cloud Functions, no push). The realtime listener above sees every create / edit /
+   re-assign / delete of this driver's duties; dutyAlerts() compares the upcoming 14 days with what this phone last showed
+   ("known", localStorage per company + driver), so changes made while the app was closed are shown on the next open too.
+   Pop-up (a small banner in Sat-Nav), a short sound + vibration, and a browser notification while the tab is in the
+   background (only if the driver allowed it; only while the page is still open). */
+const knownKey = () => "rt_duty_known_" + D.c.companyId + "_" + D.c.user.uid;
+const getKnown = () => { try { const v = localStorage.getItem(knownKey()); return v ? JSON.parse(v) : null; } catch (e) { return null; } };
+const setKnown = (k) => { try { localStorage.setItem(knownKey(), JSON.stringify(k)); } catch (e) { /* ignore */ } };
+D.alerts = []; D.rung = new Set();
+function checkAlerts() {
+  if (!D.c) return;
+  const today = dutyDay(), uid = D.c.user.uid, known = getKnown(), now = knownMap(D.list, today);
+  if (!known) { setKnown(now); return; }                         // first time on this phone: nothing to compare with
+  const al = dutyAlerts(known, D.list, today, { skip: (d) => !!d && d.updatedBy === uid, skipRemoved: (id) => SELF_DEL.has(id) });
+  // what is not waiting for the driver to see (own edits, unchanged) becomes known straight away
+  const keep = new Set(al.map((a) => a.id)), next = {};
+  Object.entries(now).forEach(([id, k]) => { next[id] = keep.has(id) && known[id] ? known[id] : k; if (keep.has(id) && !known[id]) delete next[id]; });
+  Object.entries(known).forEach(([id, k]) => { if (!now[id] && keep.has(id)) next[id] = k; });
+  setKnown(next);
+  D.alerts = al;
+  if (!al.length) { closeAlert(); return; }
+  const fresh = al.filter((a) => !D.rung.has(a.id + "|" + a.kind + "|" + a.lines.join()));
+  fresh.forEach((a) => D.rung.add(a.id + "|" + a.kind + "|" + a.lines.join()));
+  showAlert(!!fresh.length);
+}
+function ackAlerts(ids) {
+  if (!D.c) return;
+  const k = getKnown() || {}, now = knownMap(D.list, dutyDay());
+  ids.forEach((id) => { if (now[id]) k[id] = now[id]; else delete k[id]; });
+  setKnown(k);
+  D.alerts = D.alerts.filter((a) => !ids.includes(a.id));
+}
+const KIND_ICON = { new: "🆕", changed: "✏️", removed: "🗑" };
+function showAlert(ring) {
+  const p = $("dutyPop"); if (!p) return;
+  const al = D.alerts;
+  $("dutyPopTitle").textContent = alertTitle(al);
+  $("dutyPopList").innerHTML = al.map((a) => '<div class="dpop-item ' + a.kind + '" data-alert="' + esc(a.id) + '"><div class="dpop-h"><span aria-hidden="true">' + KIND_ICON[a.kind] + "</span> <b>" +
+    esc(dayName(a.date) + " " + ukDate(a.date)) + "</b> · " + esc(a.kind === "new" ? "new duty" : a.kind === "removed" ? "removed" : "changed") +
+    (a.kind !== "removed" ? ' <button type="button" class="btn small dpop-view" data-view="' + esc(a.date) + '">View</button>' : "") + "</div>" +
+    '<ul class="dpop-lines">' + a.lines.map((l) => "<li><mark>" + esc(l) + "</mark></li>").join("") + "</ul></div>").join("");
+  const canAsk = typeof Notification !== "undefined" && Notification.permission === "default" && !localStorage.getItem("rt_notif_asked");
+  $("dutyPopNotif").style.display = canAsk ? "" : "none";
+  $("dutyPopView").style.display = al.length === 1 && al[0].kind !== "removed" ? "" : "none";
+  p.style.display = "flex";
+  if (ring) { chime(); notifyBackground(al); }
+}
+function closeAlert() { const p = $("dutyPop"); if (p) p.style.display = "none"; }
+function wireAlert() {
+  const p = $("dutyPop"); if (!p || p.dataset.wired) return;
+  p.dataset.wired = "1";
+  $("dutyPopOk").addEventListener("click", () => { ackAlerts(D.alerts.map((a) => a.id)); closeAlert(); });
+  $("dutyPopView").addEventListener("click", () => { const a = D.alerts[0]; if (a) { ackAlerts([a.id]); closeAlert(); openDuties(a.date); } });
+  $("dutyPopList").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-view]"); if (!b) return;
+    const id = b.closest("[data-alert]").dataset.alert; ackAlerts([id]);
+    if (D.alerts.length) showAlert(false); else closeAlert();
+    openDuties(b.dataset.view);
+  });
+  $("dutyPopNotif").addEventListener("click", async () => {
+    try { localStorage.setItem("rt_notif_asked", "1"); } catch (e) { /* ignore */ }
+    $("dutyPopNotif").style.display = "none";
+    try { const r = await Notification.requestPermission(); toast(r === "granted" ? "Background alerts on ✔ (while the app is open in a tab)" : "No background alerts – you’ll still see them in the app."); } catch (e) { /* ignore */ }
+  });
+}
+/* sound: a short two-tone chime (Web Audio, unlocked on the first tap - browsers block sound before that) + vibration */
+let AC = null;
+function unlockAudio() {
+  try { if (!AC) { const C = window.AudioContext || window.webkitAudioContext; if (C) AC = new C(); } if (AC && AC.state === "suspended") AC.resume(); } catch (e) { /* ignore */ }
+}
+document.addEventListener("pointerdown", unlockAudio, { capture: true, passive: true });
+document.addEventListener("keydown", unlockAudio, { capture: true });
+function chime() {
+  try { if (navigator.vibrate) navigator.vibrate([180, 90, 180]); } catch (e) { /* ignore */ }
+  try {
+    if (!AC || AC.state !== "running") return;
+    const t = AC.currentTime;
+    [[880, 0], [1320, 0.18]].forEach(([f, at]) => {
+      const o = AC.createOscillator(), g = AC.createGain();
+      o.type = "sine"; o.frequency.value = f; g.gain.setValueAtTime(0.0001, t + at); g.gain.exponentialRampToValueAtTime(0.25, t + at + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.3);
+      o.connect(g); g.connect(AC.destination); o.start(t + at); o.stop(t + at + 0.32);
+    });
+    window.__dutyChimes = (window.__dutyChimes || 0) + 1;
+  } catch (e) { /* ignore */ }
+}
+function notifyBackground(al) {
+  try {
+    if (document.visibilityState !== "hidden" || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const n = new Notification(alertTitle(al), { body: al.slice(0, 3).map((a) => ukDate(a.date) + ": " + a.lines[0]).join("\n"), tag: "rt-duty", renotify: true });
+    n.onclick = () => { try { window.focus(); } catch (e) { /* ignore */ } n.close(); };
+  } catch (e) { /* ignore */ }
 }

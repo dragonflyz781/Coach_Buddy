@@ -4,7 +4,7 @@
      { date, driverUid, driverName, dutyNo, vehicleId?, vehicleReg?, note?, rows: [{ time: 'HHMM'|'' , text, routeId?, session?: 'AM'|'PM' }], templateId?, edited?, updatedAt, updatedBy }
    v22: duty templates ("Duty list") companies/{cid}/dutyTemplates/{id} { dutyNo, vehicleId?, vehicleReg?, note?, rows, updatedAt, updatedBy };
    a day's duty made from one is a COPY carrying templateId (+ edited: true once changed for that day). */
-import { routeSessions, destLabel, routeService } from "./services.js?v=16";
+import { routeSessions, destLabel, routeService, destKey, routeMatchesPick } from "./services.js?v=16";
 export const DUTY_ROWS_MAX = 40, ROW_TEXT_MAX = 200, DUTY_NO_MAX = 20, NOTE_MAX = 500;
 export const dutyId = (uid, date) => uid + "_" + date;
 const ISO = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -177,4 +177,101 @@ export function dayBoard(templates, duties, date) {
   const onDay = (duties || []).filter((d) => d.date === date && d.templateId);
   return (templates || []).slice().sort((a, b) => String(a.dutyNo).localeCompare(String(b.dutyNo), "en-GB", { numeric: true }))
     .map((t) => ({ t, duties: onDay.filter((d) => d.templateId === t.id) }));
+}
+
+/* ================= v24: duty change alerts (in the app, free: no push / Cloud Functions) =================
+   "known" = what this phone last showed the driver for each upcoming duty: { id: { stamp, date, dutyNo, vehicleReg, rows } }
+   (localStorage per company + driver). Comparing it with the live list finds new / changed / removed duties - also the
+   ones changed while the app was closed. */
+export const ALERT_DAYS = 14;
+export const knownOf = (d) => ({ stamp: dutyStamp(d), date: d.date, dutyNo: String(d.dutyNo || ""), vehicleReg: String(d.vehicleReg || ""),
+  rows: (d.rows || []).map((r) => ({ time: r.time || "", text: r.text || "", routeId: r.routeId || "", session: r.session || "" })) });
+export function knownMap(duties, today, days) {
+  const end = addDays(today, (days || ALERT_DAYS) - 1), out = {};
+  (duties || []).forEach((d) => { if (d.date >= today && d.date <= end) out[d.id] = knownOf(d); });
+  return out;
+}
+const rowLine = (r) => ((r.time ? r.time + " " : "") + (r.text || (r.routeId ? "route" : ""))).trim();
+/* what changed between two versions, as short lines for the alert ("Duty no. 8 → 9", "0705 → 0710 Report for duty") */
+export function dutyDiff(a, b) {
+  const out = [];
+  if (a.dutyNo !== b.dutyNo) out.push("Duty no. " + (a.dutyNo || "–") + " → " + (b.dutyNo || "–"));
+  if (a.vehicleReg !== b.vehicleReg) out.push("Vehicle " + (a.vehicleReg || "none") + " → " + (b.vehicleReg || "none"));
+  const ar = a.rows || [], br = b.rows || [];
+  const key = (r) => r.text + "|" + r.routeId + "|" + r.session;
+  const used = new Set();
+  br.forEach((r, i) => {
+    let j = ar.findIndex((x, k) => !used.has(k) && key(x) === key(r));
+    if (j < 0 && ar[i] && !used.has(i) && ar[i].time === r.time && !br.some((y) => key(y) === key(ar[i]))) j = i;   // same place, text edited
+    if (j < 0) { out.push("Added: " + rowLine(r)); return; }
+    used.add(j);
+    const o = ar[j];
+    if (o.time !== r.time) out.push((o.time || "no time") + " → " + (r.time || "no time") + " " + (r.text || "")); 
+    else if (key(o) !== key(r)) out.push("Changed: " + rowLine(o) + " → " + rowLine(r));
+  });
+  ar.forEach((r, k) => { if (!used.has(k)) out.push("Removed: " + rowLine(r)); });
+  if (!out.length && ar.map(key).join() !== br.map(key).join()) out.push("Rows put in a different order");
+  return out.map((x) => x.trim()).slice(0, 6);
+}
+/* -> [{ kind: 'new'|'changed'|'removed', id, date, lines[] }], date order.
+   known = null (first time on this phone) -> nothing (the current state just becomes known).
+   skip(d) -> true to ignore a duty (e.g. the signed-in admin made that change themselves). */
+export function dutyAlerts(known, duties, today, o) {
+  o = o || {};
+  if (!known) return [];
+  const now = knownMap(duties, today, o.days), out = [];
+  Object.entries(now).forEach(([id, k]) => {
+    const d = (duties || []).find((x) => x.id === id), was = known[id];
+    if (o.skip && o.skip(d)) return;
+    if (!was) out.push({ kind: "new", id, date: k.date, lines: [("Duty " + k.dutyNo + (k.vehicleReg ? " · " + k.vehicleReg : "")).trim(), ...(k.rows[0] ? [rowLine(k.rows.find((r) => r.time) || k.rows[0])] : [])] });
+    else if (k.stamp !== was.stamp) { const lines = dutyDiff(was, k); if (lines.length) out.push({ kind: "changed", id, date: k.date, lines }); }
+  });
+  Object.entries(known).forEach(([id, was]) => {
+    if (now[id] || was.date < today) return;
+    if (o.skipRemoved && o.skipRemoved(id)) return;
+    out.push({ kind: "removed", id, date: was.date, lines: ["Duty " + was.dutyNo + " is no longer on your worksheet"] });
+  });
+  return out.sort((x, y) => x.date.localeCompare(y.date) || x.kind.localeCompare(y.kind));
+}
+export function alertTitle(al) {
+  if (!al.length) return "";
+  if (al.length > 1) return al.length + " changes to your duties";
+  const a = al[0], when = dayName(a.date).slice(0, 3) + " " + ukDate(a.date);
+  return a.kind === "new" ? "New duty for " + when : a.kind === "removed" ? "Duty removed – " + when : "Your duty for " + when + " has changed";
+}
+
+/* ================= v24: welcome page from today's duty =================
+   The duty's linked rows (time order) -> today's selection for the day plan (same shape as the manual picker: kind + slots)
+   and a rank so the runs open in the duty's order. */
+const sessOf = (r, row) => (row.session === "AM" || row.session === "PM") ? row.session : (() => { const x = routeSessions(r); return x.am ? "AM" : x.pm ? "PM" : "none"; })();
+export function dutyRuns(duty, routes) {
+  const rows = ((duty && duty.rows) || []).map((r, i) => ({ r, i })).filter((x) => x.r.routeId && routes && routes[x.r.routeId]);
+  rows.sort((a, b) => (a.r.time && b.r.time ? a.r.time.localeCompare(b.r.time) : 0) || a.i - b.i);
+  return rows.map(({ r }) => { const rt = routes[r.routeId]; return { routeId: r.routeId, session: sessOf(rt, r), slot: routeService(rt) + "|" + sessOf(rt, r), key: destKey(rt), time: r.time || "", text: r.text || "" }; });
+}
+export function dutySel(duty, routes) {
+  const runs = dutyRuns(duty, routes);
+  if (!runs.length) return null;
+  const slots = {};
+  runs.forEach((x) => { (slots[x.slot] = slots[x.slot] || []); if (!slots[x.slot].includes(x.key)) slots[x.slot].push(x.key); });
+  return { kind: "all", slots };
+}
+/* position of a route in the duty (null = not on it) */
+export function dutyRank(duty, routes) {
+  const runs = dutyRuns(duty, routes);
+  return (r) => {
+    if (!r) return null;
+    const i = runs.findIndex((x) => { const [type, sess] = x.slot.split("|"); return destKey(r) === x.key && routeMatchesPick(r, { type, sess }); });
+    return i < 0 ? null : i;
+  };
+}
+/* the week strip: today + the next 6 days */
+export function weekStrip(duties, today, changedIds) {
+  const ch = new Set(changedIds || []);
+  return [0, 1, 2, 3, 4, 5, 6].map((i) => {
+    const date = addDays(today, i), d = (duties || []).find((x) => x.date === date) || null;
+    const first = d && (d.rows || []).find((r) => r.time);
+    const sum = d ? ((d.rows || []).find((r) => r.routeId && r.text) || (d.rows || []).find((r) => r.text) || {}).text || "" : "";
+    return { date, day: dayName(date).slice(0, 3), dm: ukDate(date).slice(0, 5), today: i === 0, duty: d, dutyNo: d ? d.dutyNo : "", report: first ? first.time : "", summary: sum, changed: !!(d && ch.has(d.id)) };
+  });
 }

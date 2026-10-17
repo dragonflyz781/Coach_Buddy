@@ -11,9 +11,10 @@ import {
 import { isConfigured, isEmulator, auth, db } from "./firebase-init.js?v=16";
 import { $, setView, toast, friendlyError, readServicePick, wireServicePick } from "./ui.js?v=16";
 import { decodePolyline, densify } from "./geo.js?v=16";
-import { initAdmin, showAdmin, onRoutesChanged, onCompanyChanged, onVehiclesChanged } from "./admin.js?v=23";
+import { initAdmin, showAdmin, onRoutesChanged, onCompanyChanged, onVehiclesChanged } from "./admin.js?v=24";
 import { initDriverMessages, stopDriverMessages, stopAdminMessages } from "./messages.js?v=21";
-import { initDriverDuties, stopDriverDuties, stopAdminDuties, todayDuty } from "./duties.js?v=23";
+import { initDriverDuties, stopDriverDuties, stopAdminDuties, todayDuty, openDuties, driverDuties, driverDutyChangedIds, dutiesReady } from "./duties.js?v=24";
+import { dutyRank } from "./dutycore.js?v=24";
 import { initVehicleCheck, findVehicleCheck, endOfDutyDone, openPredrive, openEndOfDuty, isSheetOpen, showAlreadyChecked }
   from "./vehiclecheck.js?v=23";
 import { showMaintenance, stopDefectLists } from "./defectlist.js?v=23";
@@ -22,7 +23,7 @@ import { pickedServiceTypes, welcomeName, selLabel, selMatches, encodeSel, decod
   dutyDay, prevDutyDay } from "./services.js?v=16";
 import { planDocId, planCacheKey, cleanPlan, mergePlans, planDoc } from "./dayplan.js?v=16";
 import { vehicleDims } from "./vehicles.js?v=16";
-import { runWelcome, welcomeRefresh } from "./welcome.js?v=16";
+import { runWelcome, welcomeRefresh } from "./welcome.js?v=24";
 
 const session = { user: null, profile: null, company: null, companyId: null, unsubRoutes: null, unsubCompany: null, rawRoutes: {},
   routesReady: null, routesLoaded: null, pick: null, vehicles: {}, unsubVehicles: null, vehicleId: null,
@@ -97,7 +98,8 @@ async function startSession(user) {
     initVehicleCheck({ db, user, profile, companyId: session.companyId });     // v18: also sends sheets kept on this phone
     // v21: messages (drivers; admins use the Messages tab) and "My duties" (anyone who drives)
     if (profile.role === "driver") initDriverMessages({ db, user, profile, companyId: session.companyId });
-    initDriverDuties({ db, user, profile, companyId: session.companyId, getRoutes: () => session.rawRoutes, startRun: startDutyRun });
+    initDriverDuties({ db, user, profile, companyId: session.companyId, getRoutes: () => session.rawRoutes, startRun: startDutyRun,
+      onChange: () => { welcomeRefresh(); if (todayDutyRankChanged()) pushService(); } });   // v24: the welcome duty card / run order follow live edits
     if (profile.role === "admin") {
       initAdmin({ db, auth, user, profile, companyId: session.companyId, company: session.company, openDriver, signOutAndReset });
       showAdmin();
@@ -277,14 +279,26 @@ function storeVehicle(vOrId) {
   }
 }
 
+/* v24: today's duty -> the run order (null when there is no duty / no linked runs) */
+let dutyRankSig = "";
+function todayDutyRankChanged() {
+  const t = dutyDay(), d = driverDuties().find((x) => x.date === t) || null;
+  const sig = d ? JSON.stringify((d.rows || []).map((r) => [r.time, r.routeId || "", r.session || ""])) : "";
+  if (sig === dutyRankSig) return false;
+  dutyRankSig = sig;
+  session.dutyRank = d && (d.rows || []).some((r) => r.routeId) ? (r) => dutyRank(d, session.rawRoutes || {})(r) : null;
+  return true;
+}
 function pushService() {
+  todayDutyRankChanged();
   if (!window.RoundTracker.setService) return;
   const sel = session.pick || null, picks = picksFromSel(sel);
   window.RoundTracker.setService({
     label: selLabel(sel, Object.values(session.rawRoutes || {})),
     match: sel ? (r) => selMatches(r, sel) : null,
     // v13: open the first route of the day in canonical order (School AM first …)
-    rank: (r) => routeRank(r, sel),
+    // v24: with today's duty, its linked runs come first in the duty's time order
+    rank: (r) => { const k = routeRank(r, sel), dr = session.dutyRank; const i = dr ? dr(r) : null; return i != null ? i - 1e6 : k; },
     // v14: "Next: College AM – <route>" after a submit
     slotLabel: (r) => routeSlotLabel(r, sel),
     // drawer tabs for the picks: schools|AM -> schools-am …; "no set time" and Other -> the Other tab
@@ -364,7 +378,13 @@ export async function openDriver(opts) {
   // v21: today's duty (if the office set one) pre-selects its vehicle on the welcome screen - the driver can still change it
   const duty = await todayDuty(1500);
   const dutyVeh = (opts && opts.vehicleId) || (duty && duty.vehicleId);
+  const mine = await dutiesReady(0);
   return runWelcome({
+    // v24: a driver whose office uses duties starts on today's duty + the week (the old picker stays behind "Pick runs manually")
+    useDuty: mine.length > 0 && !(opts && opts.manual), presetDuty: !!(opts && opts.presetDuty), today: dutyDay(),
+    getDuty: () => driverDuties().find((x) => x.date === dutyDay()) || null,
+    getDuties: driverDuties, getChanged: driverDutyChangedIds, getRouteMap: () => session.rawRoutes || {},
+    openDay: (date) => openDuties(date),
     name: welcomeName(session.user && session.user.displayName, session.profile && session.profile.name, session.user && session.user.email),
     company: session.company && session.company.name,
     getTypes: () => session.company && session.company.serviceTypes,
@@ -375,7 +395,7 @@ export async function openDriver(opts) {
     lastVehicleId: (dutyVeh && session.vehicles[dutyVeh]) ? dutyVeh : lastVehicleId(),
     onPick: storePick,
     onVehicle: storeVehicle
-  }).then(async () => {
+  }).then(async (res) => {
     // Re-push the welcome pick into the driver view (setVehicle is harmless if nothing was picked).
     storeVehicle(session.vehicleId);
     await vehicleGate(true);                 // v19: "Do you need to do a first use check?" -> the white pre-drive sheet
@@ -390,6 +410,8 @@ export async function openDriver(opts) {
       savePlan(plan);                        // "Change today's jobs" overwrites picks + vehicle; submitted runs stay done
     }
     showDriverView();
+    // v24: "Start this run" on the welcome duty card -> that route (and session) straight away
+    if (res && res.startRoute) setTimeout(() => { const RT = window.RoundTracker; if (RT.openRoute && !RT.openRoute(res.startRoute.routeId, res.startRoute.session)) toast("Could not open that route right now.", true); }, 300);
   });
 }
 
@@ -400,7 +422,7 @@ async function startDutyRun(routeId, duty, sess) {     // v22: + the session (AM
   if (!session.rawRoutes || !session.rawRoutes[routeId]) { toast("That route is no longer in the route list – ask the office.", true); return; }
   if (!(session.plan && session.plan.day === dutyDay())) {
     // no jobs picked today yet: the welcome screen first (vehicle from the duty pre-selected), then that route
-    await openDriver({ vehicleId: duty && duty.vehicleId });   // (today's plan from another phone is restored instead)
+    await openDriver({ vehicleId: duty && duty.vehicleId, presetDuty: true });   // (today's plan from another phone is restored instead)
   } else if (!document.body.classList.contains("view-driver")) showDriverView();
   if (!RT.openRoute || !RT.openRoute(routeId, sess)) toast("Could not open that route right now (Sat-Nav or a run is under way).", true);
 }
